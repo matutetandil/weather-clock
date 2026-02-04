@@ -2,7 +2,7 @@
 
 A beautiful Chrome extension that replaces your new tab with a feature-rich weather dashboard.
 
-![Weather Clock Screenshot](screenshots/main.png)
+![Weather Clock Screenshot](docs/screenshots/screenshot-1.png)
 
 ## Features
 
