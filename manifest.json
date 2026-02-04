@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Weather Clock",
-  "version": "0.1.0",
-  "description": "A beautiful new tab page with weather and clock",
+  "version": "0.2.0",
+  "description": "A beautiful new tab page with weather, clock, and location-based forecasts",
   "permissions": [
-    "storage"
+    "storage",
+    "geolocation"
   ],
   "chrome_url_overrides": {
     "newtab": "newtab.html"
