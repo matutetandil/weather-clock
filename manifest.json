@@ -1,18 +1,30 @@
 {
   "manifest_version": 3,
   "name": "Weather Clock",
-  "version": "0.2.0",
-  "description": "A beautiful new tab page with weather, clock, and location-based forecasts",
+  "version": "0.5.0",
+  "description": "Beautiful new tab with weather, tides, forecasts, and disaster alerts",
   "permissions": [
     "storage",
-    "geolocation"
+    "geolocation",
+    "alarms",
+    "notifications"
   ],
   "chrome_url_overrides": {
     "newtab": "newtab.html"
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "host_permissions": [
+    "https://api.open-meteo.com/*",
+    "https://api.stormglass.io/*",
+    "https://nominatim.openstreetmap.org/*",
+    "https://earthquake.usgs.gov/*",
+    "https://api.weather.gov/*"
+  ]
 }
