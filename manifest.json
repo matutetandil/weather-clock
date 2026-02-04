@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Weather Clock",
+  "version": "0.1.0",
+  "description": "A beautiful new tab page with weather and clock",
+  "permissions": [
+    "storage"
+  ],
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

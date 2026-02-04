@@ -1,0 +1,24 @@
+# AI Context (optional - remove if you want it public)
+CLAUDE.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Build artifacts
+*.zip
+dist/
+
+# Logs
+*.log
+
+# Node (if you add build tools later)
+node_modules/
+package-lock.json
