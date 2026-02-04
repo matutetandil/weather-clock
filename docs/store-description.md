@@ -37,7 +37,7 @@ TIDAL INFORMATION
 
 MULTI-CITY SUPPORT
 - GPS auto-detection for your current location
-- Save up to 5 additional cities
+- Save up to 4 additional cities
 - Carousel navigation with swipe gestures, arrows, or dots
 - Per-city alert toggles — choose which cities get disaster notifications
 

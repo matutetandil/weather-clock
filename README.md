@@ -31,7 +31,7 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 
 ### 🏙️ Multi-City Support
 - GPS location detection
-- Save up to 5 additional cities
+- Save up to 4 additional cities
 - Carousel navigation (swipe, arrows, dots)
 - Per-city timezone display
 - City search with autocomplete

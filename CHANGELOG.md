@@ -2,6 +2,16 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.2.0] - 2026-02-04
+
+### Fixed
+- Tide data cache was single-location only, causing cache thrashing with multiple cities. Every 15-minute refresh cycle re-fetched tides for all cities (2 API calls each), exhausting the Stormglass free tier (10 requests/day) within hours. Converted to per-location cache map so each city's tide data is stored independently and persists for the full day.
+
+### Changed
+- Tide data is now lazy-loaded: only the currently visible city fetches tides on page load. When navigating to another city, tides are fetched on demand (or served from cache if already fetched that day). This reduces initial API usage from 2×N cities to just 2 requests.
+- Maximum saved cities reduced from 5 to 4 (5 total with GPS) to stay within Stormglass free tier limits (10 requests/day = 5 cities × 2 endpoints).
+- Old single-location tide cache format is automatically migrated to the new per-location format.
+
 ## [1.1.0] - 2026-02-04
 
 ### Added
@@ -32,7 +42,7 @@ All notable changes to the Weather Clock extension will be documented in this fi
 
 ### Added
 - Initial release with weather display, tidal data, astronomical info, and multi-hazard disaster alerts
-- Multi-city support with GPS + 5 saved cities carousel
+- Multi-city support with GPS + saved cities carousel
 - 3D cube interface (Tides, Extended Forecast, Alerts)
 - Stormglass API error handling with cooldown system
 - Support for 15 weather models via Open-Meteo

@@ -83,22 +83,19 @@ let settings = {
 };
 
 // Max saved cities (excluding GPS)
-const MAX_CITIES = 5;
+const MAX_CITIES = 4;
 
 // Carousel state
 let currentSlide = 0;
-let slideData = []; // Cached weather data per slide
+const slideWeatherCache = {}; // Stored weather data per slide for lazy tide loading
 
 // Dismissed banner tracking (prevents re-showing after user closes)
 const dismissedBannerIds = new Set();
 
-// Tide cache
+// Tide cache (per-location to avoid cache thrashing with multiple cities)
 let tideCache = {
-  data: null,
-  date: null,
-  lat: null,
-  lon: null,
-  error: null,       // { code, message, until }
+  locations: {},     // key: "lat,lon" → { data, date }
+  globalError: null, // { code, message, until } - rate limits affect all locations
 };
 
 // Load settings from storage
@@ -109,7 +106,17 @@ async function loadSettings() {
       settings = { ...settings, ...stored.weatherClockSettings };
     }
     if (stored.tideCache) {
-      tideCache = stored.tideCache;
+      // Migrate old single-location cache format to per-location map
+      if (stored.tideCache.locations) {
+        tideCache = stored.tideCache;
+      } else if (stored.tideCache.data && stored.tideCache.lat != null) {
+        const key = tideCacheKey(stored.tideCache.lat, stored.tideCache.lon);
+        tideCache = {
+          locations: { [key]: { data: stored.tideCache.data, date: stored.tideCache.date } },
+          globalError: stored.tideCache.error || null,
+        };
+        saveTideCache();
+      }
     }
     // Migrate old model keys to new format
     const modelMigration = { 'ecmwf': 'ecmwf_ifs', 'gfs': 'gfs_seamless', 'icon': 'icon_seamless', 'gem': 'gem_seamless', 'jma': 'jma_seamless', 'metno': 'metno_seamless' };
@@ -753,6 +760,10 @@ function formatPeriodTime(date) {
 // TIDE DATA (Stormglass API with caching)
 // ============================================
 
+function tideCacheKey(lat, lon) {
+  return `${Math.round(lat * 100) / 100},${Math.round(lon * 100) / 100}`;
+}
+
 async function saveTideCache() {
   try {
     await chrome.storage.local.set({ tideCache });
@@ -761,25 +772,20 @@ async function saveTideCache() {
   }
 }
 
-function isTideCacheValid(lat, lon) {
-  if (!tideCache.data || !tideCache.date) return false;
-  
-  // Check if same day
-  const today = new Date().toDateString();
-  if (tideCache.date !== today) return false;
-  
-  // Check if same location (within ~1km)
-  if (Math.abs(tideCache.lat - lat) > 0.01) return false;
-  if (Math.abs(tideCache.lon - lon) > 0.01) return false;
-  
-  return true;
+function getCachedTideData(lat, lon) {
+  const key = tideCacheKey(lat, lon);
+  const entry = tideCache.locations[key];
+  if (!entry || !entry.data || !entry.date) return null;
+  if (entry.date !== new Date().toDateString()) return null;
+  return entry.data;
 }
 
 async function fetchTideData(lat, lon) {
-  // Check cache first
-  if (isTideCacheValid(lat, lon)) {
+  // Check per-location cache first
+  const cached = getCachedTideData(lat, lon);
+  if (cached) {
     console.log('Using cached tide data');
-    return tideCache.data;
+    return cached;
   }
 
   // No API key? Return null
@@ -788,10 +794,10 @@ async function fetchTideData(lat, lon) {
     return null;
   }
 
-  // Check if we have a cached error with a cooldown period still active
-  if (tideCache.error && tideCache.error.until && Date.now() < tideCache.error.until) {
-    const remaining = Math.ceil((tideCache.error.until - Date.now()) / 60000);
-    console.log(`Weather Clock: Stormglass cooldown active (${remaining} min remaining) - ${tideCache.error.message}`);
+  // Check if we have a global error with a cooldown period still active
+  if (tideCache.globalError && tideCache.globalError.until && Date.now() < tideCache.globalError.until) {
+    const remaining = Math.ceil((tideCache.globalError.until - Date.now()) / 60000);
+    console.log(`Weather Clock: Stormglass cooldown active (${remaining} min remaining) - ${tideCache.globalError.message}`);
     return null;
   }
 
@@ -824,12 +830,11 @@ async function fetchTideData(lat, lon) {
 
       console.error(`Weather Clock: Stormglass API error ${status} - ${errorInfo.message}`);
 
-      tideCache.error = {
+      tideCache.globalError = {
         code: status,
         message: errorInfo.message,
         until: Date.now() + errorInfo.cooldownMs
       };
-      tideCache.data = null;
       saveTideCache();
 
       return null;
@@ -844,26 +849,21 @@ async function fetchTideData(lat, lon) {
       station: seaLevelData.meta?.station?.name || 'Unknown station'
     };
 
-    // Save to cache and clear any previous error
-    tideCache = {
-      data: tideData,
-      date: now.toDateString(),
-      lat,
-      lon,
-      error: null
-    };
+    // Save to per-location cache and clear any previous global error
+    const key = tideCacheKey(lat, lon);
+    tideCache.locations[key] = { data: tideData, date: now.toDateString() };
+    tideCache.globalError = null;
     saveTideCache();
 
     return tideData;
 
   } catch (e) {
     console.error('Weather Clock: Error fetching tide data:', e);
-    tideCache.error = {
+    tideCache.globalError = {
       code: 0,
       message: 'Network error - check your connection',
       until: Date.now() + 2 * 60 * 1000 // 2 min cooldown for network errors
     };
-    tideCache.data = null;
     saveTideCache();
     return null;
   }
@@ -1111,8 +1111,8 @@ function buildTideSectionHTML(tideData, allHourTimes) {
         ${tideBarsHTML}
       </div>
     `;
-  } else if (settings.stormglassApiKey && tideCache.error) {
-    const errMsg = getStormglassErrorInfo(tideCache.error.code).uiMessage;
+  } else if (settings.stormglassApiKey && tideCache.globalError) {
+    const errMsg = getStormglassErrorInfo(tideCache.globalError.code).uiMessage;
     tideContent = `<div class="tide-no-data">${errMsg}</div>`;
   } else if (settings.stormglassApiKey) {
     tideContent = `<div class="tide-no-data">Loading tides...</div>`;
@@ -1541,7 +1541,10 @@ function goToSlide(index) {
   const totalSlides = 1 + settings.savedCities.length + (settings.savedCities.length < MAX_CITIES ? 1 : 0);
   currentSlide = Math.max(0, Math.min(index, totalSlides - 1));
   updateCarouselPosition(true);
-  
+
+  // Lazy-load tides for the newly visible slide
+  loadTidesForCurrentSlide();
+
   // Load alerts for the new slide if the alerts tab is active
   setTimeout(() => {
     const activeSlide = document.querySelector('.carousel-slide.active');
@@ -1810,22 +1813,42 @@ document.addEventListener('click', (e) => {
 });
 
 // Load weather for a specific location into a target element
-async function loadLocationWeather(lat, lon, locationName, targetEl, isGps = false) {
+async function loadLocationWeather(lat, lon, locationName, targetEl, isGps = false, fetchTides = false) {
   try {
     const [weatherData, tideData, airQualityData] = await Promise.all([
       fetchWeather(lat, lon),
-      settings.stormglassApiKey ? fetchTideData(lat, lon) : Promise.resolve(null),
+      (fetchTides && settings.stormglassApiKey) ? fetchTideData(lat, lon) : Promise.resolve(null),
       fetchAirQuality(lat, lon)
     ]);
-    
+
+    // Store for lazy tide loading on slide navigation
+    const slideIndex = isGps ? 0 : parseInt(targetEl.id.replace('weather-city-', '')) + 1;
+    slideWeatherCache[slideIndex] = { weatherData, airQualityData, lat, lon, locationName, isGps, targetEl };
+
     displayWeather(weatherData, locationName, tideData, airQualityData, targetEl, lat, isGps);
-    
+
     // Update nav zone position after content loads
     setTimeout(updateNavZonePosition, 50);
   } catch (error) {
     console.error(`Weather error for ${locationName}:`, error);
     displayWeatherError('Could not load weather data.', targetEl);
   }
+}
+
+// Lazy-load tide data for the currently visible slide only
+async function loadTidesForCurrentSlide() {
+  if (!settings.stormglassApiKey) return;
+  const stored = slideWeatherCache[currentSlide];
+  if (!stored) return;
+
+  // Skip if tides are already rendered on this slide
+  if (stored.targetEl.querySelector('.tide-wave-container')) return;
+
+  const tideData = await fetchTideData(stored.lat, stored.lon);
+  if (!tideData) return;
+
+  // Re-render with tides included
+  displayWeather(stored.weatherData, stored.locationName, tideData, stored.airQualityData, stored.targetEl, stored.lat, stored.isGps);
 }
 
 // Main weather loading function - loads all locations
@@ -1850,7 +1873,7 @@ async function loadAllWeather() {
         saveSettings();
       }
       
-      loadLocationWeather(lat, lon, locationName, gpsEl, true);
+      loadLocationWeather(lat, lon, locationName, gpsEl, true, currentSlide === 0);
     } catch (error) {
       console.error('GPS error:', error);
       if (error.code === 1) {
@@ -1860,13 +1883,13 @@ async function loadAllWeather() {
       }
     }
   }
-  
-  // Load saved cities
+
+  // Load saved cities (tides only for visible slide)
   settings.savedCities.forEach((city, i) => {
     const cityEl = document.getElementById(`weather-city-${i}`);
     if (cityEl) {
       cityEl.innerHTML = '<div class="weather-loading">Loading weather...</div>';
-      loadLocationWeather(city.lat, city.lon, city.name, cityEl);
+      loadLocationWeather(city.lat, city.lon, city.name, cityEl, false, currentSlide === i + 1);
     }
   });
 }
@@ -1929,7 +1952,7 @@ document.getElementById('refreshWeather').addEventListener('click', () => {
 document.getElementById('stormglassApiKey').addEventListener('change', (e) => {
   settings.stormglassApiKey = e.target.value.trim();
   // Clear tide cache when API key changes
-  tideCache = { data: null, date: null, lat: null, lon: null, error: null };
+  tideCache = { locations: {}, globalError: null };
   saveSettings();
   saveTideCache();
   loadWeather();
