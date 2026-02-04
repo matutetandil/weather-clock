@@ -94,7 +94,8 @@ let tideCache = {
   data: null,
   date: null,
   lat: null,
-  lon: null
+  lon: null,
+  error: null,       // { code, message, until }
 };
 
 // Load settings from storage
@@ -784,15 +785,22 @@ async function fetchTideData(lat, lon) {
     console.log('Using cached tide data');
     return tideCache.data;
   }
-  
+
   // No API key? Return null
   if (!settings.stormglassApiKey) {
     console.log('No Stormglass API key configured');
     return null;
   }
-  
+
+  // Check if we have a cached error with a cooldown period still active
+  if (tideCache.error && tideCache.error.until && Date.now() < tideCache.error.until) {
+    const remaining = Math.ceil((tideCache.error.until - Date.now()) / 60000);
+    console.log(`Weather Clock: Stormglass cooldown active (${remaining} min remaining) - ${tideCache.error.message}`);
+    return null;
+  }
+
   console.log('Fetching fresh tide data from Stormglass');
-  
+
   try {
     // Get sea level data for today (hourly)
     const now = new Date();
@@ -801,45 +809,112 @@ async function fetchTideData(lat, lon) {
     const end = new Date(start);
     end.setDate(end.getDate() + 1);
     end.setHours(23, 59, 59, 999);
-    
+
     const seaLevelUrl = `https://api.stormglass.io/v2/tide/sea-level/point?lat=${lat}&lng=${lon}&start=${start.toISOString()}&end=${end.toISOString()}`;
     const extremesUrl = `https://api.stormglass.io/v2/tide/extremes/point?lat=${lat}&lng=${lon}&start=${start.toISOString()}&end=${end.toISOString()}`;
-    
+
     const headers = { 'Authorization': settings.stormglassApiKey };
-    
+
     const [seaLevelRes, extremesRes] = await Promise.all([
       fetch(seaLevelUrl, { headers }),
       fetch(extremesUrl, { headers })
     ]);
-    
-    if (!seaLevelRes.ok || !extremesRes.ok) {
-      console.error('Stormglass API error:', seaLevelRes.status, extremesRes.status);
+
+    // Handle API errors with specific messages
+    const failedRes = !seaLevelRes.ok ? seaLevelRes : (!extremesRes.ok ? extremesRes : null);
+    if (failedRes) {
+      const status = failedRes.status;
+      const errorInfo = getStormglassErrorInfo(status);
+
+      console.error(`Weather Clock: Stormglass API error ${status} - ${errorInfo.message}`);
+
+      tideCache.error = {
+        code: status,
+        message: errorInfo.message,
+        until: Date.now() + errorInfo.cooldownMs
+      };
+      tideCache.data = null;
+      saveTideCache();
+
       return null;
     }
-    
+
     const seaLevelData = await seaLevelRes.json();
     const extremesData = await extremesRes.json();
-    
+
     const tideData = {
       seaLevel: seaLevelData.data || [],
       extremes: extremesData.data || [],
       station: seaLevelData.meta?.station?.name || 'Unknown station'
     };
-    
-    // Save to cache
+
+    // Save to cache and clear any previous error
     tideCache = {
       data: tideData,
       date: now.toDateString(),
       lat,
-      lon
+      lon,
+      error: null
     };
     saveTideCache();
-    
+
     return tideData;
-    
+
   } catch (e) {
-    console.error('Error fetching tide data:', e);
+    console.error('Weather Clock: Error fetching tide data:', e);
+    tideCache.error = {
+      code: 0,
+      message: 'Network error - check your connection',
+      until: Date.now() + 2 * 60 * 1000 // 2 min cooldown for network errors
+    };
+    tideCache.data = null;
+    saveTideCache();
     return null;
+  }
+}
+
+function getStormglassErrorInfo(status) {
+  switch (status) {
+    case 402:
+      return {
+        message: 'Daily request limit exceeded',
+        cooldownMs: 60 * 60 * 1000 // 1 hour cooldown
+      };
+    case 403:
+      return {
+        message: 'API key missing or malformed',
+        cooldownMs: 30 * 60 * 1000 // 30 min cooldown (user might fix it)
+      };
+    case 404:
+      return {
+        message: 'API endpoint not found',
+        cooldownMs: 24 * 60 * 60 * 1000 // 24 hours (likely a code issue)
+      };
+    case 405:
+      return {
+        message: 'API method not allowed',
+        cooldownMs: 24 * 60 * 60 * 1000 // 24 hours (likely a code issue)
+      };
+    case 410:
+      return {
+        message: 'API endpoint deprecated',
+        cooldownMs: 24 * 60 * 60 * 1000 // 24 hours (needs code update)
+      };
+    case 422:
+      return {
+        message: 'Invalid request parameters',
+        cooldownMs: 24 * 60 * 60 * 1000 // 24 hours (won't change for same params)
+      };
+    case 503:
+      return {
+        message: 'Stormglass service unavailable',
+        cooldownMs: 10 * 60 * 1000 // 10 min cooldown
+      };
+    default:
+      return {
+        message: `Unexpected error (${status})`,
+        cooldownMs: 5 * 60 * 1000 // 5 min cooldown
+      };
   }
 }
 
@@ -1169,6 +1244,12 @@ function displayWeather(data, locationName, tideData = null, airQualityData = nu
         ${tideBarsHTML}
       </div>
     `;
+  } else if (settings.stormglassApiKey && tideCache.error) {
+    const errMsg = tideCache.error.code === 402 ? 'Daily limit reached - retrying later'
+      : tideCache.error.code === 403 ? 'API key missing or malformed - check settings'
+      : tideCache.error.code === 503 ? 'Stormglass unavailable - retrying later'
+      : tideCache.error.message || 'Tide data unavailable';
+    tideContent = `<div class="tide-no-data">${errMsg}</div>`;
   } else if (settings.stormglassApiKey) {
     tideContent = `<div class="tide-no-data">Loading tides...</div>`;
   } else {
@@ -1886,7 +1967,7 @@ document.getElementById('refreshWeather').addEventListener('click', () => {
 document.getElementById('stormglassApiKey').addEventListener('change', (e) => {
   settings.stormglassApiKey = e.target.value.trim();
   // Clear tide cache when API key changes
-  tideCache = { data: null, date: null, lat: null, lon: null };
+  tideCache = { data: null, date: null, lat: null, lon: null, error: null };
   saveSettings();
   saveTideCache();
   loadWeather();
