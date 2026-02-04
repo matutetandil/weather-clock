@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Weather Clock",
-  "version": "0.5.0",
-  "description": "Beautiful new tab with weather, tides, forecasts, and disaster alerts",
+  "version": "1.0.0",
+  "description": "Beautiful new tab with weather, tides, forecasts, and global disaster alerts",
   "permissions": [
     "storage",
     "geolocation",
@@ -22,9 +22,20 @@
   },
   "host_permissions": [
     "https://api.open-meteo.com/*",
+    "https://air-quality-api.open-meteo.com/*",
     "https://api.stormglass.io/*",
     "https://nominatim.openstreetmap.org/*",
     "https://earthquake.usgs.gov/*",
-    "https://api.weather.gov/*"
+    "https://api.weather.gov/*",
+    "https://api.geonet.org.nz/*",
+    "https://alerts.metservice.com/*",
+    "https://feeds.meteoalarm.org/*",
+    "https://ssl.smn.gob.ar/*",
+    "https://apiprevmet3.inmet.gov.br/*",
+    "https://archivos.meteochile.gob.cl/*",
+    "https://rss.naad-adna.pelmorex.com/*",
+    "https://www.nhc.noaa.gov/*",
+    "https://severeweather.wmo.int/*",
+    "http://forms.smn.gob.ar/*"
   ]
 }
