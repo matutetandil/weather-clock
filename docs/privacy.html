@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Weather Clock - Privacy Policy</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.7;
+      color: #1a1a2e;
+      background: #f8f9fa;
+      padding: 2rem 1rem;
+    }
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      padding: 2.5rem;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 0.25rem;
+      color: #0d1b2a;
+    }
+    .subtitle {
+      color: #666;
+      font-size: 0.95rem;
+      margin-bottom: 2rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid #eee;
+    }
+    h2 {
+      font-size: 1.2rem;
+      margin-top: 1.8rem;
+      margin-bottom: 0.5rem;
+      color: #1b263b;
+    }
+    p, li { font-size: 0.95rem; color: #333; }
+    p { margin-bottom: 0.8rem; }
+    ul { margin: 0.5rem 0 1rem 1.5rem; }
+    li { margin-bottom: 0.3rem; }
+    .highlight {
+      background: #e8f4f8;
+      border-left: 3px solid #2196F3;
+      padding: 0.8rem 1rem;
+      border-radius: 0 6px 6px 0;
+      margin: 1rem 0;
+    }
+    a { color: #2196F3; }
+    footer {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #eee;
+      font-size: 0.85rem;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Privacy Policy</h1>
+    <p class="subtitle">Weather Clock &mdash; Chrome Extension &bull; Last updated: February 4, 2026</p>
+
+    <div class="highlight">
+      <strong>Summary:</strong> Weather Clock does not collect, store, or transmit any personal data to us. All your data stays on your device.
+    </div>
+
+    <h2>What Data Is Accessed</h2>
+    <p>Weather Clock accesses the following information to provide its functionality:</p>
+    <ul>
+      <li><strong>Geolocation coordinates</strong> (latitude and longitude) &mdash; used to fetch weather data, tidal information, and disaster alerts for your location.</li>
+      <li><strong>City names you save</strong> &mdash; stored locally for the multi-city carousel feature.</li>
+      <li><strong>Your preferences</strong> &mdash; theme, weather model, 12/24h format, alert toggles, and optionally a Stormglass API key you provide.</li>
+    </ul>
+
+    <h2>How Data Is Stored</h2>
+    <p>All data is stored locally on your device using <code>chrome.storage.local</code>. Nothing is sent to any server we own or operate. We do not have a backend, database, or analytics service.</p>
+
+    <h2>Third-Party API Requests</h2>
+    <p>To display weather and alert information, your coordinates are sent to the following third-party services:</p>
+    <ul>
+      <li><strong>Open-Meteo</strong> (open-meteo.com) &mdash; weather forecasts. No API key required. <a href="https://open-meteo.com/en/terms" target="_blank">Their privacy policy</a>.</li>
+      <li><strong>Stormglass</strong> (stormglass.io) &mdash; tidal data. Only if you provide your own API key. <a href="https://stormglass.io/privacy-policy/" target="_blank">Their privacy policy</a>.</li>
+      <li><strong>OpenStreetMap Nominatim</strong> (nominatim.openstreetmap.org) &mdash; geocoding (converting coordinates to city names). <a href="https://osmfoundation.org/wiki/Privacy_Policy" target="_blank">Their privacy policy</a>.</li>
+    </ul>
+    <p>For disaster alerts, your coordinates are <strong>not</strong> sent to alert APIs. Instead, the extension fetches public alert feeds and filters them locally on your device based on your region.</p>
+    <p>Alert data sources include: USGS, NWS (USA), GeoNet and MetService (New Zealand), SMN (Argentina), INMET (Brazil), MeteoChile (Chile), MeteoAlarm (Europe), NAAD (Canada), and NOAA NHC (hurricanes).</p>
+
+    <h2>Data We Collect</h2>
+    <p><strong>None.</strong> We do not collect, log, or transmit any user data. There is no analytics, no telemetry, no tracking, and no advertising.</p>
+
+    <h2>Permissions Explained</h2>
+    <ul>
+      <li><strong>Geolocation</strong> &mdash; to determine your location for weather data.</li>
+      <li><strong>Storage</strong> &mdash; to save your preferences and cached data locally.</li>
+      <li><strong>Notifications</strong> &mdash; to alert you about nearby natural disasters.</li>
+      <li><strong>Alarms</strong> &mdash; to periodically check for new disaster alerts in the background.</li>
+    </ul>
+
+    <h2>Children's Privacy</h2>
+    <p>Weather Clock does not knowingly collect any information from children under 13. The extension does not collect information from anyone.</p>
+
+    <h2>Changes to This Policy</h2>
+    <p>If we update this privacy policy, we will post the new version at this URL with an updated date. Since no data is collected, changes are unlikely.</p>
+
+    <h2>Contact</h2>
+    <p>If you have questions about this privacy policy, please open an issue on our <a href="https://github.com/matutetandil/weather-clock/issues" target="_blank">GitHub repository</a>.</p>
+
+    <footer>
+      <p>Weather Clock is an open-source project. <a href="https://github.com/matutetandil/weather-clock" target="_blank">View source on GitHub</a>.</p>
+    </footer>
+  </div>
+</body>
+</html>

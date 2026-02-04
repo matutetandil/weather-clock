@@ -7,6 +7,9 @@ All notable changes to the Weather Clock extension will be documented in this fi
 ### Added
 - Alert items now include clickable "More info" links to the source (USGS, SMN, GeoNet, MetService, MeteoAlarm, INMET, MeteoChile, NAAD, NWS, NHC).
 - Settings panel is now scrollable with styled scrollbar matching each theme.
+- Privacy policy page (`docs/privacy.html`) for Chrome Web Store and GitHub Pages.
+- GitHub Actions workflow for automatic Chrome Web Store publishing on release.
+- GitHub Pages deployment workflow for the privacy policy.
 
 ### Fixed
 - SMN Argentina "oladecalor" (heat wave) alerts failing with CORS errors due to `http://forms.smn.gob.ar` URLs redirecting cross-origin. Added `forms.smn.gob.ar` to host permissions and rewrite URLs to HTTPS to avoid redirects.
