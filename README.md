@@ -82,7 +82,7 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/weather-clock-extension.git
+git clone https://github.com/matutetandil/weather-clock.git
 
 # Load in Chrome as unpacked extension
 # Make changes to newtab.js, newtab.html, or background.js
@@ -95,8 +95,7 @@ git clone https://github.com/yourusername/weather-clock-extension.git
 ├── newtab.html        # Main UI
 ├── newtab.js          # Frontend logic
 ├── background.js      # Alert service worker
-├── icons/             # Extension icons
-└── CLAUDE.md          # AI assistant context (optional)
+└── icons/             # Extension icons
 ```
 
 ## Contributing
@@ -111,8 +110,6 @@ MIT License - feel free to use and modify.
 
 - Weather icons by [Bas Milius](https://bas.dev/work/meteocons)
 - Weather data by [Open-Meteo](https://open-meteo.com/)
-- Developed with assistance from Claude AI
-
 ---
 
 *Made with ☀️ and ☔ by Matías*
