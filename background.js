@@ -125,32 +125,8 @@ const STORAGE_KEY_ALERTS = 'activeAlerts';
 const STORAGE_KEY_SETTINGS = 'weatherClockSettings';
 
 // ============================================
-// THRESHOLDS & FACTORS
+// ALERT LEVEL MAPPING
 // ============================================
-const ALERT_THRESHOLDS = {
-  low: { critical: 100, high: 50, moderate: 20 },
-  medium: { critical: 50, high: 25, moderate: 10 },
-  high: { critical: 25, high: 10, moderate: 5 }
-};
-
-const DISTANCE_FACTORS = {
-  0: 15,      // < 50km - Critical
-  50: 10,     // 50-100km
-  100: 6,     // 100-200km
-  200: 3,     // 200-500km
-  500: 1,     // 500-1000km
-  1000: 0.3,  // 1000-3000km
-  3000: 0.1,  // 3000-10000km
-  10000: 0.02 // > 10000km - Almost irrelevant
-};
-
-const TIME_FACTORS = {
-  0: 3,       // < 10 min
-  10: 2,      // 10-30 min
-  30: 1.5,    // 30-60 min
-  60: 1,      // 1-3 hours
-  180: 0.5    // > 3 hours
-};
 
 // Disaster type configs
 const DISASTER_TYPES = {
@@ -205,24 +181,6 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-function getDistanceFactor(distanceKm) {
-  if (distanceKm < 50) return DISTANCE_FACTORS[0];
-  if (distanceKm < 100) return DISTANCE_FACTORS[50];
-  if (distanceKm < 200) return DISTANCE_FACTORS[100];
-  if (distanceKm < 500) return DISTANCE_FACTORS[200];
-  if (distanceKm < 1000) return DISTANCE_FACTORS[500];
-  if (distanceKm < 3000) return DISTANCE_FACTORS[1000];
-  if (distanceKm < 10000) return DISTANCE_FACTORS[3000];
-  return DISTANCE_FACTORS[10000];
-}
-
-function getTimeFactor(minutesAgo) {
-  if (minutesAgo < 10) return TIME_FACTORS[0];
-  if (minutesAgo < 30) return TIME_FACTORS[10];
-  if (minutesAgo < 60) return TIME_FACTORS[30];
-  if (minutesAgo < 180) return TIME_FACTORS[60];
-  return TIME_FACTORS[180];
-}
 
 function formatTimeAgo(minutes) {
   if (minutes < 1) return 'just now';
@@ -259,11 +217,34 @@ function getMmiDescription(mmi) {
   return 'Extreme';
 }
 
-function getAlertLevel(relevance, thresholds) {
-  if (relevance >= thresholds.critical) return 'critical';
-  if (relevance >= thresholds.high) return 'high';
-  if (relevance >= thresholds.moderate) return 'moderate';
-  return 'info';
+// Map CAP weather severity directly to alert level.
+// The issuing authority defines severity; time/distance should not inflate it.
+//   Extreme → critical (red), Severe → high (orange),
+//   Moderate → moderate (yellow), Minor/Unknown → info (hidden)
+function mapWeatherSeverity(severity) {
+  if (severity === 'Extreme') return { alertLevel: 'critical', relevance: 90 };
+  if (severity === 'Severe') return { alertLevel: 'high', relevance: 60 };
+  if (severity === 'Moderate') return { alertLevel: 'moderate', relevance: 30 };
+  return { alertLevel: 'info', relevance: 10 };
+}
+
+// Map calculated local MMI (at user's location) to alert level.
+// MMI 6+ Strong (damage possible), 5 Moderate (felt by all),
+// 4 Light (felt by many), <4 Not felt / barely felt.
+// M7+ earthquakes always show as moderate minimum (major events).
+function mapLocalMMI(localMMI, magnitude) {
+  if (localMMI >= 6) return { alertLevel: 'critical', relevance: 90 };
+  if (localMMI >= 5) return { alertLevel: 'high', relevance: 60 };
+  if (localMMI >= 4) return { alertLevel: 'moderate', relevance: 30 };
+  if (magnitude >= 7) return { alertLevel: 'moderate', relevance: 25 };
+  return { alertLevel: 'info', relevance: 5 };
+}
+
+// Elevate an alert level by one step (e.g., for tsunami/tornado warnings).
+function elevateAlertLevel({ alertLevel, relevance }) {
+  if (alertLevel === 'info') return { alertLevel: 'moderate', relevance: 30 };
+  if (alertLevel === 'moderate') return { alertLevel: 'high', relevance: 60 };
+  return { alertLevel: 'critical', relevance: 90 };
 }
 
 // Check if location is in hurricane-prone area
@@ -315,7 +296,7 @@ async function getUserLocations(settings) {
 // ============================================
 // EARTHQUAKE CHECKING (USGS)
 // ============================================
-async function checkEarthquakes(locations, seenIds, thresholds) {
+async function checkEarthquakes(locations, seenIds) {
   const alerts = [];
   
   try {
@@ -340,24 +321,17 @@ async function checkEarthquakes(locations, seenIds, thresholds) {
       for (const location of locations) {
         const distanceKm = calculateDistance(location.lat, location.lon, lat, lon);
         const minutesAgo = (Date.now() - time) / 60000;
-        
-        const distanceFactor = getDistanceFactor(distanceKm);
-        const timeFactor = getTimeFactor(minutesAgo);
-        
-        // Calculate local MMI estimate
+
+        // Calculate local MMI at user's location
         const hypocentralDist = Math.sqrt(distanceKm * distanceKm + (depth || 10) ** 2);
-        let localMMI = hypocentralDist < 1 ? 
+        let localMMI = hypocentralDist < 1 ?
           Math.min(12, 5.07 + 1.09 * magnitude) :
           5.07 + 1.09 * magnitude - 3.69 * Math.log10(hypocentralDist);
         localMMI = Math.max(1, Math.min(12, localMMI));
-        
-        // Calculate relevance
-        let relevance = (sig / 10) * distanceFactor * timeFactor;
-        if (tsunami === 1) relevance *= 2;
-        if (localMMI >= 4) relevance *= (1 + (localMMI - 3) * 0.2);
-        
-        const alertLevel = getAlertLevel(relevance, thresholds);
-        
+
+        let { alertLevel, relevance } = mapLocalMMI(localMMI, magnitude);
+        if (tsunami === 1) ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
+
         if (alertLevel !== 'info') {
           alerts.push({
             id: eq.id,
@@ -368,7 +342,7 @@ async function checkEarthquakes(locations, seenIds, thresholds) {
             localMMI: Math.round(localMMI * 10) / 10,
             distanceKm: Math.round(distanceKm),
             minutesAgo: Math.round(minutesAgo),
-            relevance: Math.round(relevance * 10) / 10,
+            relevance,
             place: props.place,
             time,
             tsunami: tsunami === 1,
@@ -392,7 +366,7 @@ async function checkEarthquakes(locations, seenIds, thresholds) {
 // NWS ALERTS (Tsunamis, Severe Weather - USA)
 // api.weather.gov has CORS enabled
 // ============================================
-async function checkNWSAlerts(locations, seenIds, thresholds) {
+async function checkNWSAlerts(locations, seenIds) {
   const alerts = [];
   
   // Only check if any location is in USA
@@ -468,19 +442,13 @@ async function checkNWSAlerts(locations, seenIds, thresholds) {
       for (const location of usaLocations) {
         const distanceKm = calculateDistance(location.lat, location.lon, alertLat, alertLon);
         const minutesAgo = (Date.now() - time) / 60000;
-        
-        // NWS alerts are already filtered for impact, so use higher base relevance
-        let baseRelevance = 50; // Default high
-        if (severity === 'Extreme') baseRelevance = 100;
-        else if (severity === 'Severe') baseRelevance = 75;
-        else if (severity === 'Moderate') baseRelevance = 40;
-        
-        // Tsunami/tornado warnings get extra boost
-        if (type === 'tsunami' || type === 'tornado') baseRelevance *= 1.5;
-        
-        const relevance = baseRelevance * getDistanceFactor(distanceKm) * getTimeFactor(minutesAgo);
-        const alertLevel = getAlertLevel(relevance, thresholds);
-        
+
+        let { alertLevel, relevance } = mapWeatherSeverity(severity);
+        // Tsunami/tornado warnings elevate one step
+        if (type === 'tsunami' || type === 'tornado') {
+          ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
+        }
+
         if (alertLevel !== 'info') {
           alerts.push({
             id,
@@ -488,7 +456,7 @@ async function checkNWSAlerts(locations, seenIds, thresholds) {
             alertLevel,
             distanceKm: Math.round(distanceKm),
             minutesAgo: Math.round(minutesAgo),
-            relevance: Math.round(relevance * 10) / 10,
+            relevance,
             place: props.areaDesc || props.headline || eventType,
             headline: props.headline,
             severity,
@@ -496,7 +464,8 @@ async function checkNWSAlerts(locations, seenIds, thresholds) {
             locationName: location.name,
             eventLat: alertLat,
             eventLon: alertLon,
-            nwsEvent: eventType
+            nwsEvent: eventType,
+            url: `https://alerts.weather.gov`
           });
           break;
         }
@@ -513,7 +482,7 @@ async function checkNWSAlerts(locations, seenIds, thresholds) {
 // GEONET CHECKING (NEW ZEALAND)
 // api.geonet.org.nz - Earthquakes and volcanic alerts
 // ============================================
-async function checkGeoNet(locations, seenIds, thresholds) {
+async function checkGeoNet(locations, seenIds) {
   const alerts = [];
   
   // Only check if any location is in New Zealand
@@ -548,17 +517,16 @@ async function checkGeoNet(locations, seenIds, thresholds) {
       for (const location of nzLocations) {
         const distanceKm = calculateDistance(location.lat, location.lon, lat, lon);
         const minutesAgo = (Date.now() - time) / 60000;
-        
-        // Calculate relevance similar to USGS
-        const sig = Math.pow(10, 1.5 * magnitude); // Approximate significance
-        const distanceFactor = getDistanceFactor(distanceKm);
-        const timeFactor = getTimeFactor(minutesAgo);
-        
-        let relevance = (sig / 1000) * distanceFactor * timeFactor;
-        if (mmi >= 4) relevance *= (1 + (mmi - 3) * 0.2);
-        
-        const alertLevel = getAlertLevel(relevance, thresholds);
-        
+
+        // Calculate local MMI at user's location (not epicentral MMI)
+        const hypocentralDist = Math.sqrt(distanceKm * distanceKm + (depth || 10) ** 2);
+        let localMMI = hypocentralDist < 1 ?
+          Math.min(12, 5.07 + 1.09 * magnitude) :
+          5.07 + 1.09 * magnitude - 3.69 * Math.log10(hypocentralDist);
+        localMMI = Math.max(1, Math.min(12, localMMI));
+
+        const { alertLevel, relevance } = mapLocalMMI(localMMI, magnitude);
+
         if (alertLevel !== 'info') {
           alerts.push({
             id,
@@ -566,16 +534,17 @@ async function checkGeoNet(locations, seenIds, thresholds) {
             alertLevel,
             magnitude,
             depth: depth || 0,
-            localMMI: mmi,
+            localMMI: Math.round(localMMI * 10) / 10,
             distanceKm: Math.round(distanceKm),
             minutesAgo: Math.round(minutesAgo),
-            relevance: Math.round(relevance * 10) / 10,
-            place: props.locality || `${distanceKm}km from ${location.name}`,
+            relevance,
+            place: props.locality || `${Math.round(distanceKm)}km from ${location.name}`,
             time,
             locationName: location.name,
             eventLat: lat,
             eventLon: lon,
-            source: 'GeoNet'
+            source: 'GeoNet',
+            url: `https://www.geonet.org.nz/earthquake/${id}`
           });
           break;
         }
@@ -592,7 +561,7 @@ async function checkGeoNet(locations, seenIds, thresholds) {
 // METSERVICE CAP CHECKING (NEW ZEALAND WEATHER)
 // https://alerts.metservice.com/cap/rss - Severe Weather Alerts
 // ============================================
-async function checkMetServiceCAP(locations, seenIds, thresholds) {
+async function checkMetServiceCAP(locations, seenIds) {
   const alerts = [];
   
   // Only check if any location is in New Zealand
@@ -661,20 +630,12 @@ async function checkMetServiceCAP(locations, seenIds, thresholds) {
       // For CAP alerts, we apply to all NZ locations since polygon parsing is complex
       // The alert is relevant if user is anywhere in NZ
       for (const location of nzLocations) {
-        // Base relevance by severity
-        let baseRelevance = 30;
-        if (severity === 'Severe') baseRelevance = 80;
-        else if (severity === 'Moderate') baseRelevance = 50;
-        else if (severity === 'Minor') baseRelevance = 25;
-        
-        // Thunderstorm warnings are more urgent
+        let { alertLevel, relevance } = mapWeatherSeverity(severity);
+        // Severe thunderstorm warnings elevate one step
         if (eventType === 'thunderstorm' && severity === 'Severe') {
-          baseRelevance = 100;
+          ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
         }
-        
-        const relevance = baseRelevance * getTimeFactor(minutesAgo);
-        const alertLevel = getAlertLevel(relevance, thresholds);
-        
+
         if (alertLevel !== 'info') {
           alerts.push({
             id: guid,
@@ -683,14 +644,14 @@ async function checkMetServiceCAP(locations, seenIds, thresholds) {
             severity,
             eventType,
             minutesAgo: Math.round(minutesAgo),
-            relevance: Math.round(relevance * 10) / 10,
+            relevance,
             place: title || 'New Zealand',
             headline: title,
             description: description,
             time,
             locationName: location.name,
             source: 'MetService',
-            link
+            url: link
           });
           break; // Only one alert per CAP item
         }
@@ -741,33 +702,35 @@ function parseSMNPolygon(polygonStr) {
 // Fetch individual CAP XML and check if location is within polygon
 async function fetchSMNAlertDetail(alertUrl, location) {
   try {
-    const response = await fetch(alertUrl, {
+    // Rewrite http:// to https:// to avoid CORS-blocked redirects
+    const url = alertUrl.replace(/^http:\/\//, 'https://');
+
+    const response = await fetch(url, {
       headers: { 'Accept': 'application/xml, text/xml' }
     });
     if (!response.ok) return null;
-    
+
     const text = await response.text();
-    
+
     // Parse polygon
     const polygonMatch = text.match(/<polygon>([^<]+)<\/polygon>/);
     if (!polygonMatch) {
-      console.log('Weather Clock: SMN alert has no polygon, skipping:', alertUrl);
       return null;
     }
-    
+
     const polygon = parseSMNPolygon(polygonMatch[1]);
     if (!polygon) {
-      console.log('Weather Clock: SMN polygon parse failed:', alertUrl);
       return null;
     }
-    
+
     // Check if user location is inside polygon
     const isInside = pointInPolygon(location.lat, location.lon, polygon);
-    console.log(`Weather Clock: SMN polygon check for ${location.name} (${location.lat}, ${location.lon}): ${isInside ? 'INSIDE' : 'outside'}`);
-    
+
     if (!isInside) {
       return null; // User not in affected area
     }
+
+    // Match found - details logged in summary at end of checkArgentinaSMN
     
     // Parse other fields
     const getTag = (tag) => {
@@ -798,7 +761,7 @@ async function fetchSMNAlertDetail(alertUrl, location) {
   }
 }
 
-async function checkArgentinaSMN(locations, seenIds, thresholds) {
+async function checkArgentinaSMN(locations, seenIds) {
   const alerts = [];
   
   const arLocations = locations.filter(loc => isInArgentina(loc.lat, loc.lon));
@@ -890,18 +853,7 @@ async function checkArgentinaSMN(locations, seenIds, thresholds) {
                        detail.sent ? new Date(detail.sent).getTime() : Date.now();
           const minutesAgo = (Date.now() - time) / 60000;
           
-          let baseRelevance = 50;
-          if (severity === 'Extreme') baseRelevance = 100;
-          else if (severity === 'Severe') baseRelevance = 80;
-          else if (severity === 'Moderate') baseRelevance = 50;
-          else if (severity === 'Minor') baseRelevance = 25;
-          
-          // Boost for tormentas (can be dangerous)
-          if (phenomenon === 'tormenta') baseRelevance *= 1.2;
-          
-          const relevance = baseRelevance * getTimeFactor(minutesAgo);
-          const alertLevel = getAlertLevel(relevance, thresholds);
-          
+          const { alertLevel, relevance } = mapWeatherSeverity(severity);
           if (alertLevel === 'info') return null;
           
           return {
@@ -918,7 +870,8 @@ async function checkArgentinaSMN(locations, seenIds, thresholds) {
             time,
             locationName: location.name,
             source: 'SMN Argentina',
-            expires: detail.expires ? new Date(detail.expires).getTime() : null
+            expires: detail.expires ? new Date(detail.expires).getTime() : null,
+            url: 'https://www.smn.gob.ar/alertas'
           };
         })
       );
@@ -927,7 +880,10 @@ async function checkArgentinaSMN(locations, seenIds, thresholds) {
       alerts.push(...batchResults.filter(a => a !== null));
     }
     
-    console.log(`Weather Clock: SMN found ${alerts.length} alerts affecting user locations (out of ${alertLinks.length} total alerts in feed)`);
+    if (alerts.length > 0) {
+      console.log(`Weather Clock: SMN ${alerts.length}/${alertLinks.length} alerts match user locations:`,
+        alerts.map(a => `${a.severity} ${a.eventType} for ${a.locationName}`));
+    }
     
   } catch (err) {
     console.error('Weather Clock: Argentina SMN check error:', err);
@@ -940,7 +896,7 @@ async function checkArgentinaSMN(locations, seenIds, thresholds) {
 // EUROPE METEOALARM CAP CHECKING
 // https://feeds.meteoalarm.org/ - 38 European countries
 // ============================================
-async function checkMeteoAlarm(locations, seenIds, thresholds) {
+async function checkMeteoAlarm(locations, seenIds) {
   const alerts = [];
   
   const euLocations = locations.filter(loc => isInEurope(loc.lat, loc.lon));
@@ -999,10 +955,8 @@ async function checkMeteoAlarm(locations, seenIds, thresholds) {
       const minutesAgo = (Date.now() - time) / 60000;
       
       for (const location of euLocations) {
-        let baseRelevance = severity === 'Severe' ? 80 : severity === 'Moderate' ? 50 : 25;
-        const relevance = baseRelevance * getTimeFactor(minutesAgo);
-        const alertLevel = getAlertLevel(relevance, thresholds);
-        
+        const { alertLevel, relevance } = mapWeatherSeverity(severity);
+
         if (alertLevel !== 'info') {
           alerts.push({
             id,
@@ -1011,13 +965,14 @@ async function checkMeteoAlarm(locations, seenIds, thresholds) {
             severity,
             eventType,
             minutesAgo: Math.round(minutesAgo),
-            relevance: Math.round(relevance * 10) / 10,
+            relevance,
             place: title || 'Europe',
             headline: title,
             description: summary,
             time,
             locationName: location.name,
-            source: 'MeteoAlarm'
+            source: 'MeteoAlarm',
+            url: 'https://www.meteoalarm.org'
           });
           break;
         }
@@ -1034,7 +989,7 @@ async function checkMeteoAlarm(locations, seenIds, thresholds) {
 // BRAZIL INMET CAP CHECKING
 // https://apiprevmet3.inmet.gov.br/avisos/rss
 // ============================================
-async function checkBrazilINMET(locations, seenIds, thresholds) {
+async function checkBrazilINMET(locations, seenIds) {
   const alerts = [];
   
   const brLocations = locations.filter(loc => isInBrazil(loc.lat, loc.lon));
@@ -1088,10 +1043,8 @@ async function checkBrazilINMET(locations, seenIds, thresholds) {
       const minutesAgo = (Date.now() - time) / 60000;
       
       for (const location of brLocations) {
-        let baseRelevance = severity === 'Severe' ? 80 : severity === 'Moderate' ? 50 : 25;
-        const relevance = baseRelevance * getTimeFactor(minutesAgo);
-        const alertLevel = getAlertLevel(relevance, thresholds);
-        
+        const { alertLevel, relevance } = mapWeatherSeverity(severity);
+
         if (alertLevel !== 'info') {
           alerts.push({
             id: guid,
@@ -1100,13 +1053,14 @@ async function checkBrazilINMET(locations, seenIds, thresholds) {
             severity,
             eventType,
             minutesAgo: Math.round(minutesAgo),
-            relevance: Math.round(relevance * 10) / 10,
+            relevance,
             place: title || 'Brasil',
             headline: title,
             description,
             time,
             locationName: location.name,
-            source: 'INMET Brasil'
+            source: 'INMET Brasil',
+            url: 'https://alertas2.inmet.gov.br'
           });
           break;
         }
@@ -1123,7 +1077,7 @@ async function checkBrazilINMET(locations, seenIds, thresholds) {
 // CHILE METEOCHILE CAP CHECKING
 // https://archivos.meteochile.gob.cl/portaldmc/rss/rss.php
 // ============================================
-async function checkChileMeteo(locations, seenIds, thresholds) {
+async function checkChileMeteo(locations, seenIds) {
   const alerts = [];
   
   const clLocations = locations.filter(loc => isInChile(loc.lat, loc.lon));
@@ -1179,10 +1133,8 @@ async function checkChileMeteo(locations, seenIds, thresholds) {
       const minutesAgo = (Date.now() - time) / 60000;
       
       for (const location of clLocations) {
-        let baseRelevance = severity === 'Severe' ? 80 : severity === 'Moderate' ? 50 : 25;
-        const relevance = baseRelevance * getTimeFactor(minutesAgo);
-        const alertLevel = getAlertLevel(relevance, thresholds);
-        
+        const { alertLevel, relevance } = mapWeatherSeverity(severity);
+
         if (alertLevel !== 'info') {
           alerts.push({
             id: guid,
@@ -1191,13 +1143,14 @@ async function checkChileMeteo(locations, seenIds, thresholds) {
             severity,
             eventType,
             minutesAgo: Math.round(minutesAgo),
-            relevance: Math.round(relevance * 10) / 10,
+            relevance,
             place: title || 'Chile',
             headline: title,
             description,
             time,
             locationName: location.name,
-            source: 'MeteoChile'
+            source: 'MeteoChile',
+            url: 'https://www.meteochile.gob.cl/alertas'
           });
           break;
         }
@@ -1214,7 +1167,7 @@ async function checkChileMeteo(locations, seenIds, thresholds) {
 // CANADA NAAD CAP CHECKING
 // https://rss.naad-adna.pelmorex.com/
 // ============================================
-async function checkCanadaNAAD(locations, seenIds, thresholds) {
+async function checkCanadaNAAD(locations, seenIds) {
   const alerts = [];
   
   const caLocations = locations.filter(loc => isInCanada(loc.lat, loc.lon));
@@ -1273,11 +1226,12 @@ async function checkCanadaNAAD(locations, seenIds, thresholds) {
       const minutesAgo = (Date.now() - time) / 60000;
       
       for (const location of caLocations) {
-        let baseRelevance = severity === 'Severe' ? 80 : severity === 'Moderate' ? 50 : 25;
-        if (eventType === 'tornado') baseRelevance = 100;
-        const relevance = baseRelevance * getTimeFactor(minutesAgo);
-        const alertLevel = getAlertLevel(relevance, thresholds);
-        
+        let { alertLevel, relevance } = mapWeatherSeverity(severity);
+        // Tornado warnings elevate one step
+        if (eventType === 'tornado') {
+          ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
+        }
+
         if (alertLevel !== 'info') {
           alerts.push({
             id,
@@ -1286,13 +1240,14 @@ async function checkCanadaNAAD(locations, seenIds, thresholds) {
             severity,
             eventType,
             minutesAgo: Math.round(minutesAgo),
-            relevance: Math.round(relevance * 10) / 10,
+            relevance,
             place: title || 'Canada',
             headline: title,
             description: summary,
             time,
             locationName: location.name,
-            source: 'NAAD Canada'
+            source: 'NAAD Canada',
+            url: 'https://weather.gc.ca/warnings/index_e.html'
           });
           break;
         }
@@ -1308,7 +1263,7 @@ async function checkCanadaNAAD(locations, seenIds, thresholds) {
 // ============================================
 // HURRICANE CHECKING (NOAA NHC)
 // ============================================
-async function checkHurricanes(locations, seenIds, thresholds) {
+async function checkHurricanes(locations, seenIds) {
   const alerts = [];
   
   // Only check if any location is in hurricane zone
@@ -1338,11 +1293,20 @@ async function checkHurricanes(locations, seenIds, thresholds) {
         
         const distanceKm = calculateDistance(location.lat, location.lon, lat, lon);
         
-        // Hurricanes are relevant at longer distances
+        // Map hurricane alert level by classification + distance.
+        // NHC classifications: HU=Hurricane, TS=Tropical Storm, TD=Depression
         if (distanceKm < 1500) {
-          const relevance = (intensity / 2) * getDistanceFactor(distanceKm / 3);
-          const alertLevel = getAlertLevel(relevance, thresholds);
-          
+          const isHurricane = category === 'HU';
+          const isTropicalStorm = category === 'TS' || category === 'STS';
+
+          let alertLevel, relevance;
+          if (isHurricane && distanceKm < 500) { alertLevel = 'critical'; relevance = 90; }
+          else if (isHurricane && distanceKm < 1000) { alertLevel = 'high'; relevance = 60; }
+          else if (isTropicalStorm && distanceKm < 500) { alertLevel = 'high'; relevance = 60; }
+          else if (isHurricane) { alertLevel = 'moderate'; relevance = 30; }
+          else if (isTropicalStorm && distanceKm < 1000) { alertLevel = 'moderate'; relevance = 30; }
+          else { alertLevel = 'info'; relevance = 5; }
+
           if (alertLevel !== 'info') {
             alerts.push({
               id,
@@ -1352,12 +1316,13 @@ async function checkHurricanes(locations, seenIds, thresholds) {
               category,
               intensity,
               distanceKm: Math.round(distanceKm),
-              relevance: Math.round(relevance * 10) / 10,
+              relevance,
               place: `${name} - ${storm.movementDir || ''} at ${storm.movementSpeed || '?'} mph`,
               time: Date.now(),
               locationName: location.name,
               eventLat: lat,
-              eventLon: lon
+              eventLon: lon,
+              url: 'https://www.nhc.noaa.gov'
             });
             break;
           }
@@ -1376,7 +1341,7 @@ async function checkHurricanes(locations, seenIds, thresholds) {
 // Covered by NWS alerts for USA
 // No free global API with CORS available
 // ============================================
-async function checkVolcanoes(locations, seenIds, thresholds) {
+async function checkVolcanoes(locations, seenIds) {
   return [];
 }
 
@@ -1406,9 +1371,6 @@ async function checkAllDisasters() {
       return;
     }
     
-    const alertLevel = settings.alertLevel || 'medium';
-    const thresholds = ALERT_THRESHOLDS[alertLevel];
-    
     console.log(`Weather Clock: Checking disasters for ${locations.length} locations...`);
     
     // Determine which regional APIs to check based on locations
@@ -1423,21 +1385,21 @@ async function checkAllDisasters() {
     
     // Build list of checks to run
     const checks = [
-      checkEarthquakes(locations, seenIds, thresholds) // Always check global earthquakes
+      checkEarthquakes(locations, seenIds) // Always check global earthquakes
     ];
     
     // Regional weather alert APIs
-    if (hasUSA) checks.push(checkNWSAlerts(locations, seenIds, thresholds));
+    if (hasUSA) checks.push(checkNWSAlerts(locations, seenIds));
     if (hasNZ) {
-      checks.push(checkGeoNet(locations, seenIds, thresholds));      // NZ earthquakes
-      checks.push(checkMetServiceCAP(locations, seenIds, thresholds)); // NZ weather alerts
+      checks.push(checkGeoNet(locations, seenIds));      // NZ earthquakes
+      checks.push(checkMetServiceCAP(locations, seenIds)); // NZ weather alerts
     }
-    if (hasCanada) checks.push(checkCanadaNAAD(locations, seenIds, thresholds));
-    if (hasEurope) checks.push(checkMeteoAlarm(locations, seenIds, thresholds));
-    if (hasArgentina) checks.push(checkArgentinaSMN(locations, seenIds, thresholds));
-    if (hasBrazil) checks.push(checkBrazilINMET(locations, seenIds, thresholds));
-    if (hasChile) checks.push(checkChileMeteo(locations, seenIds, thresholds));
-    if (hasHurricaneZone) checks.push(checkHurricanes(locations, seenIds, thresholds));
+    if (hasCanada) checks.push(checkCanadaNAAD(locations, seenIds));
+    if (hasEurope) checks.push(checkMeteoAlarm(locations, seenIds));
+    if (hasArgentina) checks.push(checkArgentinaSMN(locations, seenIds));
+    if (hasBrazil) checks.push(checkBrazilINMET(locations, seenIds));
+    if (hasChile) checks.push(checkChileMeteo(locations, seenIds));
+    if (hasHurricaneZone) checks.push(checkHurricanes(locations, seenIds));
     
     // Log which APIs are being checked
     const regions = [];

@@ -150,6 +150,12 @@
       background: rgba(0, 0, 0, 0.05);
       color: #333;
     }
+    .theme-light .settings-panel::-webkit-scrollbar-thumb {
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .theme-light .settings-panel::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 0, 0, 0.35);
+    }
     .theme-light select,
     .theme-light input {
       background: rgba(0, 0, 0, 0.05) !important;
@@ -193,6 +199,12 @@
     .theme-cream .settings-btn {
       background: rgba(139, 119, 91, 0.1);
       color: #5d5040;
+    }
+    .theme-cream .settings-panel::-webkit-scrollbar-thumb {
+      background: rgba(139, 119, 91, 0.25);
+    }
+    .theme-cream .settings-panel::-webkit-scrollbar-thumb:hover {
+      background: rgba(139, 119, 91, 0.4);
     }
     .theme-cream select,
     .theme-cream input {
@@ -470,7 +482,8 @@
       top: 8px;
       right: 8px;
       display: flex;
-      gap: 6px;
+      flex-direction: column;
+      gap: 4px;
       z-index: 20;
     }
 
@@ -482,6 +495,8 @@
       background: rgba(128, 128, 128, 0.15);
       cursor: pointer;
       font-size: 14px;
+      opacity: 0;
+      transition: opacity 0.2s, background 0.2s;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -489,12 +504,13 @@
     }
 
     .city-alert-btn:hover {
+      opacity: 1 !important;
       background: rgba(128, 128, 128, 0.3);
       transform: scale(1.1);
     }
 
     .city-alert-btn.alerts-off {
-      opacity: 0.5;
+      opacity: 0.35 !important;
     }
 
     .remove-city-btn {
@@ -514,7 +530,9 @@
     }
 
     .weather-widget:hover .remove-city-btn,
-    .weather-carousel:hover .remove-city-btn {
+    .weather-carousel:hover .remove-city-btn,
+    .weather-widget:hover .city-alert-btn,
+    .weather-carousel:hover .city-alert-btn {
       opacity: 0.5;
     }
 
@@ -934,9 +952,25 @@
       border-radius: 12px;
       padding: 20px;
       min-width: 280px;
+      max-height: 70vh;
+      overflow-y: auto;
       display: none;
       backdrop-filter: blur(10px);
       transition: background 0.3s, border 0.3s;
+    }
+
+    .settings-panel::-webkit-scrollbar {
+      width: 6px;
+    }
+    .settings-panel::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .settings-panel::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+    }
+    .settings-panel::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.35);
     }
 
     .settings-panel.active {
@@ -1311,6 +1345,18 @@
       display: flex;
       gap: 6px;
       margin-top: 3px;
+    }
+
+    .alert-item-link {
+      color: #60a5fa;
+      text-decoration: none;
+      margin-left: auto;
+      opacity: 1;
+      white-space: nowrap;
+    }
+
+    .alert-item-link:hover {
+      text-decoration: underline;
     }
 
     .alert-item-tsunami {

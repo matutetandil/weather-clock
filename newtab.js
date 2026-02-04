@@ -89,6 +89,9 @@ const MAX_CITIES = 5;
 let currentSlide = 0;
 let slideData = []; // Cached weather data per slide
 
+// Dismissed banner tracking (prevents re-showing after user closes)
+const dismissedBannerIds = new Set();
+
 // Tide cache
 let tideCache = {
   data: null,
@@ -1333,8 +1336,8 @@ function displayWeather(data, locationName, tideData = null, airQualityData = nu
     
     cityActionsHTML = `
       <div class="city-actions">
-        <button class="city-alert-btn ${alertsOn ? 'alerts-on' : 'alerts-off'}" data-toggle-alerts="${cityIndex}" title="${bellTitle}">${bellIcon}</button>
         <button class="remove-city-btn" data-remove-city="${cityIndex}" title="Remove city">✕</button>
+        <button class="city-alert-btn ${alertsOn ? 'alerts-on' : 'alerts-off'}" data-toggle-alerts="${cityIndex}" title="${bellTitle}">${bellIcon}</button>
       </div>
     `;
   }
@@ -1795,11 +1798,14 @@ document.addEventListener('click', (e) => {
     }
   }
   
-  // Dismiss alert banner
+  // Dismiss alert banner and remember it
   const dismissBtn = e.target.closest('.alert-banner-dismiss');
   if (dismissBtn) {
     const banner = document.getElementById('alertBanner');
-    if (banner) banner.classList.remove('visible');
+    if (banner) {
+      if (banner.dataset.alertId) dismissedBannerIds.add(banner.dataset.alertId);
+      banner.classList.remove('visible');
+    }
   }
 });
 
@@ -2048,6 +2054,10 @@ function renderAlertItem(alert) {
     detailsHTML = `<span>${alert.source || alert.locationName || ''}</span>`;
   }
 
+  const linkHTML = alert.url
+    ? `<a class="alert-item-link" href="${alert.url}" target="_blank" rel="noopener noreferrer">More info ↗</a>`
+    : '';
+
   return `
     <div class="alert-item ${levelClass}" data-id="${alert.id}">
       <div class="alert-item-header">
@@ -2057,6 +2067,7 @@ function renderAlertItem(alert) {
       <div class="alert-item-place">${alert.place || 'Unknown location'}</div>
       <div class="alert-item-details">
         ${detailsHTML}
+        ${linkHTML}
       </div>
       ${alert.tsunami ? '<div class="alert-item-tsunami">⚠️ Tsunami Warning</div>' : ''}
     </div>
@@ -2163,16 +2174,24 @@ function showAlertBanner(alert) {
     title = `${typeEmoji} Volcanic Activity`;
   } else if (alert.type === 'wildfire') {
     title = `${typeEmoji} Wildfire Alert`;
+  } else if (alert.type === 'severe_weather') {
+    title = `${typeEmoji} ${alert.place || alert.severity || 'Weather Alert'}`;
   } else {
     title = `${typeEmoji} ${alert.type || 'Alert'}`;
   }
   
+  const locationInfo = alert.distanceKm !== undefined
+    ? `${alert.distanceKm}km from ${alert.locationName || 'you'}`
+    : (alert.locationName || '');
+  const titleSuffix = locationInfo ? ` - ${locationInfo}` : '';
+
   banner.className = `alert-banner ${levelClass} visible`;
+  banner.dataset.alertId = alert.id || '';
   banner.innerHTML = `
     <div class="alert-banner-content">
       <span class="alert-banner-icon">${levelEmoji}</span>
       <div class="alert-banner-text">
-        <div class="alert-banner-title">${title} - ${alert.distanceKm}km from ${alert.locationName || 'you'}</div>
+        <div class="alert-banner-title">${title}${titleSuffix}</div>
         <div class="alert-banner-sub">${alert.place || 'Unknown'} • ${timeAgo}</div>
       </div>
       <button class="alert-banner-dismiss">✕</button>
@@ -2185,16 +2204,18 @@ async function checkForNewAlerts() {
   try {
     const response = await chrome.runtime.sendMessage({ action: 'getAlerts' });
     const alerts = response?.alerts || [];
-    
-    // Find alerts from the last 10 minutes that are high/critical
+
+    // Find alerts from the last 10 minutes that are high/critical and not dismissed
     const recentCritical = alerts.filter(a => {
       const minutesAgo = (Date.now() - a.time) / 60000;
-      return minutesAgo < 10 && (a.alertLevel === 'critical' || a.alertLevel === 'high');
+      return minutesAgo < 10 &&
+        (a.alertLevel === 'critical' || a.alertLevel === 'high') &&
+        !dismissedBannerIds.has(a.id);
     });
-    
+
     if (recentCritical.length > 0) {
       // Show banner for the most relevant one
-      const mostRelevant = recentCritical.reduce((a, b) => 
+      const mostRelevant = recentCritical.reduce((a, b) =>
         a.relevance > b.relevance ? a : b
       );
       showAlertBanner(mostRelevant);

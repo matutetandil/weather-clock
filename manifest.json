@@ -18,6 +18,7 @@
     "https://feeds.meteoalarm.org/*",
     "https://api.weather.gc.ca/*",
     "https://ssl.smn.gob.ar/*",
+    "https://forms.smn.gob.ar/*",
     "https://apiprevmet3.inmet.gov.br/*",
     "https://archivos.meteochile.gob.cl/*",
     "https://rss.naad-adna.pelmorex.com/*",
