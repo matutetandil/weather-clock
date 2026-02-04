@@ -431,28 +431,27 @@ function getTempUnit() {
   return settings.unit === 'fahrenheit' ? '°F' : '°C';
 }
 
-// Format hour for display
-function formatHour(date) {
+// Core time formatting helper
+function formatTime(date, { showMinutes = true, showAmPm = true } = {}) {
+  let hours = date.getHours();
+  const minutes = date.getMinutes().toString().padStart(2, '0');
   if (settings.timeFormat === '12') {
-    let hours = date.getHours();
     const ampm = hours >= 12 ? 'PM' : 'AM';
     hours = hours % 12 || 12;
-    return `${hours}${ampm}`;
+    const suffix = showAmPm ? ampm : '';
+    return showMinutes ? `${hours}:${minutes}${suffix}` : `${hours}${suffix}`;
   }
-  return `${date.getHours()}:00`;
+  return showMinutes ? `${hours}:${minutes}` : `${hours}:00`;
 }
 
-// Format time for sunrise/sunset
+// Format hour for display (e.g. "3PM" or "15:00")
+function formatHour(date) {
+  return formatTime(date, { showMinutes: false, showAmPm: true });
+}
+
+// Format time for sunrise/sunset (e.g. "6:30" or "6:30")
 function formatSunTime(isoString) {
-  const date = new Date(isoString);
-  if (settings.timeFormat === '12') {
-    let hours = date.getHours();
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12 || 12;
-    return `${hours}:${minutes}`;
-  }
-  return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+  return formatTime(new Date(isoString), { showMinutes: true, showAmPm: false });
 }
 
 // Check if time is night
@@ -742,15 +741,9 @@ function getSolunarPeriods(date, sunrise, sunset) {
   return periods.sort((a, b) => a.start - b.start);
 }
 
+// Format time for solunar periods (e.g. "6:30PM" or "6:30")
 function formatPeriodTime(date) {
-  if (settings.timeFormat === '12') {
-    let hours = date.getHours();
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12 || 12;
-    return `${hours}:${minutes}${ampm}`;
-  }
-  return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+  return formatTime(date);
 }
 
 // ============================================
@@ -873,49 +866,22 @@ async function fetchTideData(lat, lon) {
   }
 }
 
+const STORMGLASS_ERRORS = {
+  402: { message: 'Daily request limit exceeded', cooldownMs: 60 * 60 * 1000, uiMessage: 'Daily limit reached - retrying later' },
+  403: { message: 'API key missing or malformed', cooldownMs: 30 * 60 * 1000, uiMessage: 'API key missing or malformed - check settings' },
+  404: { message: 'API endpoint not found', cooldownMs: 24 * 60 * 60 * 1000, uiMessage: 'Tide service error' },
+  405: { message: 'API method not allowed', cooldownMs: 24 * 60 * 60 * 1000, uiMessage: 'Tide service error' },
+  410: { message: 'API endpoint deprecated', cooldownMs: 24 * 60 * 60 * 1000, uiMessage: 'Tide service error' },
+  422: { message: 'Invalid request parameters', cooldownMs: 24 * 60 * 60 * 1000, uiMessage: 'Tide service error' },
+  503: { message: 'Stormglass service unavailable', cooldownMs: 10 * 60 * 1000, uiMessage: 'Stormglass unavailable - retrying later' }
+};
+
 function getStormglassErrorInfo(status) {
-  switch (status) {
-    case 402:
-      return {
-        message: 'Daily request limit exceeded',
-        cooldownMs: 60 * 60 * 1000 // 1 hour cooldown
-      };
-    case 403:
-      return {
-        message: 'API key missing or malformed',
-        cooldownMs: 30 * 60 * 1000 // 30 min cooldown (user might fix it)
-      };
-    case 404:
-      return {
-        message: 'API endpoint not found',
-        cooldownMs: 24 * 60 * 60 * 1000 // 24 hours (likely a code issue)
-      };
-    case 405:
-      return {
-        message: 'API method not allowed',
-        cooldownMs: 24 * 60 * 60 * 1000 // 24 hours (likely a code issue)
-      };
-    case 410:
-      return {
-        message: 'API endpoint deprecated',
-        cooldownMs: 24 * 60 * 60 * 1000 // 24 hours (needs code update)
-      };
-    case 422:
-      return {
-        message: 'Invalid request parameters',
-        cooldownMs: 24 * 60 * 60 * 1000 // 24 hours (won't change for same params)
-      };
-    case 503:
-      return {
-        message: 'Stormglass service unavailable',
-        cooldownMs: 10 * 60 * 1000 // 10 min cooldown
-      };
-    default:
-      return {
-        message: `Unexpected error (${status})`,
-        cooldownMs: 5 * 60 * 1000 // 5 min cooldown
-      };
-  }
+  return STORMGLASS_ERRORS[status] || {
+    message: `Unexpected error (${status})`,
+    cooldownMs: 5 * 60 * 1000,
+    uiMessage: 'Tide data unavailable'
+  };
 }
 
 function getTideDataForHours(tideData, hours) {
@@ -1009,6 +975,178 @@ function generateTideHTML(tideHeights) {
 // DISPLAY FUNCTIONS
 // ============================================
 
+// Build 12-hour forecast array with sun events interleaved
+function buildHourlyForecastItems(hourly, cityNow, daily, todaySunrise, todaySunset, tomorrowSunrise, tomorrowSunset) {
+  const currentHourIndex = hourly.time.findIndex(t => new Date(t) >= cityNow);
+  const forecastItems = [];
+  const allHourTimes = [];
+
+  // Collect sun events that should be shown
+  const sunEvents = [];
+
+  if (todaySunrise > cityNow) {
+    sunEvents.push({
+      time: todaySunrise, isSunrise: true, isSunset: false,
+      iconUrl: `${METEOCONS_BASE}/sunrise.svg`,
+      sunTime: formatSunTime(daily.sunrise[0])
+    });
+  }
+
+  if (todaySunset > cityNow) {
+    sunEvents.push({
+      time: todaySunset, isSunrise: false, isSunset: true,
+      iconUrl: `${METEOCONS_BASE}/sunset.svg`,
+      sunTime: formatSunTime(daily.sunset[0])
+    });
+  }
+
+  if (tomorrowSunrise && tomorrowSunrise > cityNow) {
+    sunEvents.push({
+      time: tomorrowSunrise, isSunrise: true, isSunset: false,
+      iconUrl: `${METEOCONS_BASE}/sunrise.svg`,
+      sunTime: formatSunTime(daily.sunrise[1])
+    });
+  }
+
+  if (tomorrowSunset && tomorrowSunset > cityNow) {
+    sunEvents.push({
+      time: tomorrowSunset, isSunrise: false, isSunset: true,
+      iconUrl: `${METEOCONS_BASE}/sunset.svg`,
+      sunTime: formatSunTime(daily.sunset[1])
+    });
+  }
+
+  sunEvents.sort((a, b) => a.time - b.time);
+
+  // Build list of 12 hours
+  for (let i = 0; i < 12 && (currentHourIndex + i) < hourly.time.length; i++) {
+    const idx = currentHourIndex + i;
+    const hourTime = new Date(hourly.time[idx]);
+    const hourTemp = convertTemp(hourly.temperature_2m[idx]);
+    const hourWeatherCode = hourly.weather_code[idx];
+    const hourPrecipProb = hourly.precipitation_probability ? hourly.precipitation_probability[idx] : null;
+
+    allHourTimes.push(hourTime);
+
+    let hourIsNight = isNightTime(hourTime, todaySunrise, todaySunset);
+    if (tomorrowSunrise && hourTime > todaySunset) {
+      hourIsNight = hourTime < tomorrowSunrise;
+    }
+
+    forecastItems.push({
+      time: hourTime, temp: hourTemp,
+      iconUrl: getWeatherIconUrl(hourWeatherCode, hourIsNight),
+      precipProb: hourPrecipProb, isSunrise: false, isSunset: false
+    });
+  }
+
+  // Insert sun events in the correct positions
+  for (const sunEvent of sunEvents) {
+    let insertIndex = -1;
+    for (let i = 0; i < forecastItems.length; i++) {
+      const item = forecastItems[i];
+      if (item.isSunrise || item.isSunset) continue;
+      const hourStart = item.time;
+      const hourEnd = new Date(hourStart.getTime() + 60 * 60 * 1000);
+      if (sunEvent.time >= hourStart && sunEvent.time < hourEnd) {
+        insertIndex = i + 1;
+        break;
+      }
+    }
+    if (insertIndex > 0) {
+      forecastItems.splice(insertIndex, 0, {
+        time: sunEvent.time, temp: null, iconUrl: sunEvent.iconUrl,
+        isSunrise: sunEvent.isSunrise, isSunset: sunEvent.isSunset,
+        sunTime: sunEvent.sunTime
+      });
+    }
+  }
+
+  return { forecastItems, allHourTimes };
+}
+
+// Render hourly forecast items to HTML
+function buildHourlyForecastHTML(forecastItems) {
+  return forecastItems.map((hour) => {
+    const isSunEvent = hour.isSunrise || hour.isSunset;
+    const timeLabel = isSunEvent ? (hour.isSunrise ? 'Sunrise' : 'Sunset') : formatHour(hour.time);
+    const tempOrTime = isSunEvent ? hour.sunTime : `${hour.temp}°`;
+
+    const precipHTML = (!isSunEvent && hour.precipProb !== null && hour.precipProb > 0)
+      ? `<div class="weather-hour-precip"><img src="${METEOCONS_BASE}/raindrops.svg" class="precip-icon-small" alt="rain" />${hour.precipProb}%</div>`
+      : '';
+
+    return `
+      <div class="weather-hour ${isSunEvent ? 'sun-event' : ''}">
+        <div class="weather-hour-time">${timeLabel}</div>
+        <img class="weather-hour-icon" src="${hour.iconUrl}" alt="weather" />
+        <div class="weather-hour-temp">${tempOrTime}</div>
+        ${precipHTML}
+      </div>
+    `;
+  }).join('');
+}
+
+// Render tide section (bars, error, or placeholder)
+function buildTideSectionHTML(tideData, allHourTimes) {
+  let tideContent = '';
+  let tideNextHTML = '';
+
+  if (tideData && tideData.seaLevel && tideData.seaLevel.length > 0) {
+    const tideHeights = getTideDataForHours(tideData, allHourTimes);
+    const nextExtreme = getNextTideExtreme(tideData);
+    const tideBarsHTML = generateTideHTML(tideHeights);
+
+    if (nextExtreme) {
+      const typeIcon = nextExtreme.type === 'high' ? '▲' : '▼';
+      const typeLabel = nextExtreme.type === 'high' ? 'High' : 'Low';
+      tideNextHTML = `<span class="tide-next">${typeIcon} ${typeLabel} ${formatPeriodTime(nextExtreme.time)}</span>`;
+    }
+
+    tideContent = `
+      <div class="tide-wave-container">
+        ${tideBarsHTML}
+      </div>
+    `;
+  } else if (settings.stormglassApiKey && tideCache.error) {
+    const errMsg = getStormglassErrorInfo(tideCache.error.code).uiMessage;
+    tideContent = `<div class="tide-no-data">${errMsg}</div>`;
+  } else if (settings.stormglassApiKey) {
+    tideContent = `<div class="tide-no-data">Loading tides...</div>`;
+  } else {
+    tideContent = `<div class="tide-no-data">No tide data - Add Stormglass API key in settings</div>`;
+  }
+
+  return { tideContent, tideNextHTML };
+}
+
+// Render 16-day extended forecast grid
+function buildExtendedForecastHTML(daily) {
+  return daily.time.map((date, i) => {
+    const dayDate = new Date(date);
+    const dayName = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : dayDate.toLocaleDateString('en-US', { weekday: 'short' });
+    const dayNum = dayDate.getDate();
+    const maxT = convertTemp(daily.temperature_2m_max[i]);
+    const minT = convertTemp(daily.temperature_2m_min[i]);
+    const code = daily.weather_code[i];
+    const precip = daily.precipitation_probability_max[i];
+    const iconUrl = getWeatherIconUrl(code, false);
+
+    return `
+      <div class="forecast-day">
+        <div class="forecast-day-name">${dayName}</div>
+        <div class="forecast-day-num">${dayNum}</div>
+        <img class="forecast-day-icon" src="${iconUrl}" alt="weather" />
+        <div class="forecast-day-temps">
+          <span class="forecast-max">${maxT}°</span>
+          <span class="forecast-min">${minT}°</span>
+        </div>
+        ${precip > 0 ? `<div class="forecast-day-precip"><img src="${METEOCONS_BASE}/raindrops.svg" class="precip-icon-small" alt="rain" />${precip}%</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
 function displayWeather(data, locationName, tideData = null, airQualityData = null, targetEl = null, cityLat = null, isGps = false) {
   const current = data.current;
   const daily = data.daily;
@@ -1091,195 +1229,13 @@ function displayWeather(data, locationName, tideData = null, airQualityData = nu
   const solunarPeriods = getSolunarPeriods(cityNow, todaySunrise, todaySunset);
   const nextPeriod = solunarPeriods.find(p => p.end > cityNow);
   
-  // Get next 12 hours of forecast with sun events inserted
-  const currentHourIndex = hourly.time.findIndex(t => new Date(t) >= cityNow);
-  const forecastItems = [];
-  const allHourTimes = []; // For tide data
-  
-  // Collect sun events that should be shown
-  const sunEvents = [];
-  
-  // Check today's sunrise
-  if (todaySunrise > cityNow) {
-    sunEvents.push({
-      time: todaySunrise,
-      isSunrise: true,
-      isSunset: false,
-      iconUrl: `${METEOCONS_BASE}/sunrise.svg`,
-      sunTime: formatSunTime(daily.sunrise[0])
-    });
-  }
-  
-  // Check today's sunset
-  if (todaySunset > cityNow) {
-    sunEvents.push({
-      time: todaySunset,
-      isSunrise: false,
-      isSunset: true,
-      iconUrl: `${METEOCONS_BASE}/sunset.svg`,
-      sunTime: formatSunTime(daily.sunset[0])
-    });
-  }
-  
-  // Check tomorrow's sunrise (for night hours)
-  if (tomorrowSunrise && tomorrowSunrise > cityNow) {
-    sunEvents.push({
-      time: tomorrowSunrise,
-      isSunrise: true,
-      isSunset: false,
-      iconUrl: `${METEOCONS_BASE}/sunrise.svg`,
-      sunTime: formatSunTime(daily.sunrise[1])
-    });
-  }
-  
-  // Check tomorrow's sunset (for daytime hours extending into next day)
-  if (tomorrowSunset && tomorrowSunset > cityNow) {
-    sunEvents.push({
-      time: tomorrowSunset,
-      isSunrise: false,
-      isSunset: true,
-      iconUrl: `${METEOCONS_BASE}/sunset.svg`,
-      sunTime: formatSunTime(daily.sunset[1])
-    });
-  }
-  
-  // Sort sun events by time
-  sunEvents.sort((a, b) => a.time - b.time);
-  
-  // Build list of 12 hours
-  for (let i = 0; i < 12 && (currentHourIndex + i) < hourly.time.length; i++) {
-    const idx = currentHourIndex + i;
-    const hourTime = new Date(hourly.time[idx]);
-    const hourTemp = convertTemp(hourly.temperature_2m[idx]);
-    const hourWeatherCode = hourly.weather_code[idx];
-    const hourPrecipProb = hourly.precipitation_probability ? hourly.precipitation_probability[idx] : null;
-    
-    allHourTimes.push(hourTime);
-    
-    // Check if this hour is at night
-    let hourIsNight = isNightTime(hourTime, todaySunrise, todaySunset);
-    if (tomorrowSunrise && hourTime > todaySunset) {
-      hourIsNight = hourTime < tomorrowSunrise;
-    }
-    
-    const hourIconUrl = getWeatherIconUrl(hourWeatherCode, hourIsNight);
-    
-    forecastItems.push({
-      time: hourTime,
-      temp: hourTemp,
-      iconUrl: hourIconUrl,
-      precipProb: hourPrecipProb,
-      isSunrise: false,
-      isSunset: false
-    });
-  }
-  
-  // Insert sun events in the correct positions
-  for (const sunEvent of sunEvents) {
-    // Find the position where this sun event should be inserted
-    let insertIndex = -1;
-    for (let i = 0; i < forecastItems.length; i++) {
-      const item = forecastItems[i];
-      if (item.isSunrise || item.isSunset) continue; // Skip other sun events
-      
-      const hourStart = item.time;
-      const hourEnd = new Date(hourStart.getTime() + 60 * 60 * 1000);
-      
-      // If sun event falls within this hour, insert after this hour
-      if (sunEvent.time >= hourStart && sunEvent.time < hourEnd) {
-        insertIndex = i + 1;
-        break;
-      }
-    }
-    
-    if (insertIndex > 0) {
-      forecastItems.splice(insertIndex, 0, {
-        time: sunEvent.time,
-        temp: null,
-        iconUrl: sunEvent.iconUrl,
-        isSunrise: sunEvent.isSunrise,
-        isSunset: sunEvent.isSunset,
-        sunTime: sunEvent.sunTime
-      });
-    }
-  }
-  
-  // Build hourly forecast HTML
-  const hourlyHTML = forecastItems.map((hour) => {
-    const isSunEvent = hour.isSunrise || hour.isSunset;
-    const timeLabel = isSunEvent ? (hour.isSunrise ? 'Sunrise' : 'Sunset') : formatHour(hour.time);
-    const tempOrTime = isSunEvent ? hour.sunTime : `${hour.temp}°`;
-    
-    // Show precip probability only if > 0 and not a sun event
-    const precipHTML = (!isSunEvent && hour.precipProb !== null && hour.precipProb > 0)
-      ? `<div class="weather-hour-precip"><img src="${METEOCONS_BASE}/raindrops.svg" class="precip-icon-small" alt="rain" />${hour.precipProb}%</div>`
-      : '';
-    
-    return `
-      <div class="weather-hour ${isSunEvent ? 'sun-event' : ''}">
-        <div class="weather-hour-time">${timeLabel}</div>
-        <img class="weather-hour-icon" src="${hour.iconUrl}" alt="weather" />
-        <div class="weather-hour-temp">${tempOrTime}</div>
-        ${precipHTML}
-      </div>
-    `;
-  }).join('');
-  
-  // Build tide section HTML
-  let tideContent = '';
-  let tideNextHTML = '';
-  if (tideData && tideData.seaLevel && tideData.seaLevel.length > 0) {
-    const tideHeights = getTideDataForHours(tideData, allHourTimes);
-    const nextExtreme = getNextTideExtreme(tideData);
-    const tideBarsHTML = generateTideHTML(tideHeights);
-    
-    if (nextExtreme) {
-      const typeIcon = nextExtreme.type === 'high' ? '▲' : '▼';
-      const typeLabel = nextExtreme.type === 'high' ? 'High' : 'Low';
-      tideNextHTML = `<span class="tide-next">${typeIcon} ${typeLabel} ${formatPeriodTime(nextExtreme.time)}</span>`;
-    }
-    
-    tideContent = `
-      <div class="tide-wave-container">
-        ${tideBarsHTML}
-      </div>
-    `;
-  } else if (settings.stormglassApiKey && tideCache.error) {
-    const errMsg = tideCache.error.code === 402 ? 'Daily limit reached - retrying later'
-      : tideCache.error.code === 403 ? 'API key missing or malformed - check settings'
-      : tideCache.error.code === 503 ? 'Stormglass unavailable - retrying later'
-      : tideCache.error.message || 'Tide data unavailable';
-    tideContent = `<div class="tide-no-data">${errMsg}</div>`;
-  } else if (settings.stormglassApiKey) {
-    tideContent = `<div class="tide-no-data">Loading tides...</div>`;
-  } else {
-    tideContent = `<div class="tide-no-data">No tide data - Add Stormglass API key in settings</div>`;
-  }
-  
-  // Build extended forecast HTML (16 days)
-  const extendedHTML = daily.time.map((date, i) => {
-    const dayDate = new Date(date);
-    const dayName = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : dayDate.toLocaleDateString('en-US', { weekday: 'short' });
-    const dayNum = dayDate.getDate();
-    const maxT = convertTemp(daily.temperature_2m_max[i]);
-    const minT = convertTemp(daily.temperature_2m_min[i]);
-    const code = daily.weather_code[i];
-    const precip = daily.precipitation_probability_max[i];
-    const iconUrl = getWeatherIconUrl(code, false);
-    
-    return `
-      <div class="forecast-day">
-        <div class="forecast-day-name">${dayName}</div>
-        <div class="forecast-day-num">${dayNum}</div>
-        <img class="forecast-day-icon" src="${iconUrl}" alt="weather" />
-        <div class="forecast-day-temps">
-          <span class="forecast-max">${maxT}°</span>
-          <span class="forecast-min">${minT}°</span>
-        </div>
-        ${precip > 0 ? `<div class="forecast-day-precip"><img src="${METEOCONS_BASE}/raindrops.svg" class="precip-icon-small" alt="rain" />${precip}%</div>` : ''}
-      </div>
-    `;
-  }).join('');
+  // Build forecast data and HTML via helper functions
+  const { forecastItems, allHourTimes } = buildHourlyForecastItems(
+    hourly, cityNow, daily, todaySunrise, todaySunset, tomorrowSunrise, tomorrowSunset
+  );
+  const hourlyHTML = buildHourlyForecastHTML(forecastItems);
+  const { tideContent, tideNextHTML } = buildTideSectionHTML(tideData, allHourTimes);
+  const extendedHTML = buildExtendedForecastHTML(daily);
   
   // Build the 3D cube with three faces (Tides, Extended, Alerts)
   const tideHTML = `
@@ -2007,55 +1963,128 @@ document.querySelectorAll('.theme-option').forEach(el => {
 // EARTHQUAKE ALERTS FUNCTIONS
 // ============================================
 
+// Alert emoji constants (shared by loadAlerts and showAlertBanner)
+const ALERT_TYPE_EMOJIS = {
+  earthquake: '🌍',
+  tsunami: '🌊',
+  volcano: '🌋',
+  hurricane: '🌀',
+  wildfire: '🔥',
+  tornado: '🌪️',
+  severe_weather: '⛈️'
+};
+
+const ALERT_LEVEL_EMOJIS = {
+  critical: '🔴',
+  high: '🟠',
+  moderate: '🟡',
+  info: 'ℹ️'
+};
+
+// Filter alerts by city, age, deduplicate, sort, validate, and limit to 10
+function filterAndDeduplicateAlerts(alerts, cityName) {
+  let filtered = cityName
+    ? alerts.filter(a => a.locationName === cityName)
+    : alerts;
+
+  // Filter out old alerts (more than 6 hours for weather, 24h for earthquakes)
+  const now = Date.now();
+  filtered = filtered.filter(a => {
+    const ageHours = (now - a.time) / (1000 * 60 * 60);
+    if (a.type === 'earthquake') return ageHours < 24;
+    return ageHours < 6;
+  });
+
+  // Deduplicate by type + headline
+  const seenKeys = new Set();
+  filtered = filtered.filter(a => {
+    const key = `${a.type}-${a.eventType || ''}-${a.severity || ''}-${a.source || ''}`;
+    if (seenKeys.has(key)) return false;
+    seenKeys.add(key);
+    return true;
+  });
+
+  // Sort by time (newest first), validate, and limit
+  filtered.sort((a, b) => b.time - a.time);
+  return filtered.filter(a => a.type && a.id).slice(0, 10);
+}
+
+// Render a single alert item to HTML
+function renderAlertItem(alert) {
+  const levelClass = `alert-level-${alert.alertLevel}`;
+  const levelEmoji = ALERT_LEVEL_EMOJIS[alert.alertLevel] || 'ℹ️';
+  const typeEmoji = ALERT_TYPE_EMOJIS[alert.type] || '⚠️';
+  const timeAgo = formatAlertTimeAgo(alert.time);
+
+  // Build magnitude/intensity display based on type
+  let intensityDisplay = '';
+  if (alert.type === 'earthquake' && alert.magnitude !== undefined) {
+    intensityDisplay = `M${alert.magnitude.toFixed(1)}`;
+  } else if (alert.type === 'hurricane') {
+    intensityDisplay = alert.name || 'Storm';
+  } else if (alert.type === 'severe_weather') {
+    intensityDisplay = alert.severity || 'Weather Alert';
+  } else if (alert.type) {
+    intensityDisplay = alert.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  } else {
+    intensityDisplay = 'Alert';
+  }
+
+  // Build details based on type
+  let detailsHTML = '';
+  if (alert.type === 'earthquake') {
+    detailsHTML = `<span>${alert.distanceKm} km from ${alert.locationName || 'you'}</span>`;
+    const mmiDesc = getMmiDescription(alert.localMMI);
+    detailsHTML += `<span>•</span><span>Depth: ${alert.depth}km</span><span>•</span><span>Felt: ${mmiDesc}</span>`;
+  } else if (alert.type === 'severe_weather') {
+    const eventLabel = alert.eventType ? alert.eventType.replace(/_/g, ' ') : '';
+    detailsHTML = `<span>${alert.source || 'Weather Service'}</span>`;
+    if (eventLabel && eventLabel !== 'weather') {
+      detailsHTML += `<span>•</span><span>${eventLabel}</span>`;
+    }
+  } else if (alert.distanceKm !== undefined) {
+    detailsHTML = `<span>${alert.distanceKm} km from ${alert.locationName || 'you'}</span>`;
+  } else {
+    detailsHTML = `<span>${alert.source || alert.locationName || ''}</span>`;
+  }
+
+  return `
+    <div class="alert-item ${levelClass}" data-id="${alert.id}">
+      <div class="alert-item-header">
+        <span class="alert-item-mag">${levelEmoji} ${typeEmoji} ${intensityDisplay}</span>
+        <span class="alert-item-time">${timeAgo}</span>
+      </div>
+      <div class="alert-item-place">${alert.place || 'Unknown location'}</div>
+      <div class="alert-item-details">
+        ${detailsHTML}
+      </div>
+      ${alert.tsunami ? '<div class="alert-item-tsunami">⚠️ Tsunami Warning</div>' : ''}
+    </div>
+  `;
+}
+
 // Load alerts from background service worker
 async function loadAlerts() {
-  // Find the alerts content in the currently visible slide
   const activeSlide = document.querySelector('.carousel-slide.active');
-  const alertsContent = activeSlide ? 
-    activeSlide.querySelector('.alerts-content') : 
+  const alertsContent = activeSlide ?
+    activeSlide.querySelector('.alerts-content') :
     document.querySelector('.alerts-content');
-  
+
   if (!alertsContent) return;
-  
-  // Determine the current city name for this slide
+
   let currentCityName = null;
   if (currentSlide === 0) {
-    // GPS slide - use location name or 'Current Location'
     currentCityName = settings.locationName || 'Current Location';
   } else if (settings.savedCities && settings.savedCities[currentSlide - 1]) {
-    // Saved city slide
     currentCityName = settings.savedCities[currentSlide - 1].name;
   }
-  
+
   try {
-    // Request alerts from background
     const response = await chrome.runtime.sendMessage({ action: 'getAlerts' });
     const alerts = response?.alerts || [];
-    
-    // Filter alerts for the current city/location
-    let filteredAlerts = currentCityName 
-      ? alerts.filter(a => a.locationName === currentCityName)
-      : alerts;
-    
-    // Filter out old alerts (more than 6 hours for weather, 24h for earthquakes)
-    const now = Date.now();
-    filteredAlerts = filteredAlerts.filter(a => {
-      const ageHours = (now - a.time) / (1000 * 60 * 60);
-      if (a.type === 'earthquake') return ageHours < 24;
-      return ageHours < 6; // Weather alerts expire faster
-    });
-    
-    // Deduplicate by type + headline (same phenomenon shouldn't show multiple times)
-    const seenKeys = new Set();
-    filteredAlerts = filteredAlerts.filter(a => {
-      // Create a key based on type, severity/headline, and source
-      const key = `${a.type}-${a.eventType || ''}-${a.severity || ''}-${a.source || ''}`;
-      if (seenKeys.has(key)) return false;
-      seenKeys.add(key);
-      return true;
-    });
-    
-    if (filteredAlerts.length === 0) {
+    const recentAlerts = filterAndDeduplicateAlerts(alerts, currentCityName);
+
+    if (recentAlerts.length === 0) {
       alertsContent.innerHTML = `
         <div class="alerts-empty">
           <div class="alerts-empty-icon">✓</div>
@@ -2065,89 +2094,11 @@ async function loadAlerts() {
       `;
       return;
     }
-    
-    // Sort by time (newest first)
-    filteredAlerts.sort((a, b) => b.time - a.time);
-    
-    // Filter out invalid alerts (missing type) and show last 10
-    const validAlerts = filteredAlerts.filter(a => a.type && a.id);
-    const recentAlerts = validAlerts.slice(0, 10);
-    
-    const typeEmojis = {
-      earthquake: '🌍',
-      tsunami: '🌊',
-      volcano: '🌋',
-      hurricane: '🌀',
-      wildfire: '🔥',
-      tornado: '🌪️',
-      severe_weather: '⛈️'
-    };
-    
-    const alertsHTML = recentAlerts.map(alert => {
-      const levelClass = `alert-level-${alert.alertLevel}`;
-      const levelEmoji = {
-        critical: '🔴',
-        high: '🟠',
-        moderate: '🟡',
-        info: 'ℹ️'
-      }[alert.alertLevel] || 'ℹ️';
-      
-      const typeEmoji = typeEmojis[alert.type] || '⚠️';
-      const timeAgo = formatAlertTimeAgo(alert.time);
-      
-      // Build magnitude/intensity display based on type
-      let intensityDisplay = '';
-      if (alert.type === 'earthquake' && alert.magnitude !== undefined) {
-        intensityDisplay = `M${alert.magnitude.toFixed(1)}`;
-      } else if (alert.type === 'hurricane') {
-        intensityDisplay = alert.name || 'Storm';
-      } else if (alert.type === 'severe_weather') {
-        // For weather alerts, show severity
-        intensityDisplay = alert.severity || 'Weather Alert';
-      } else if (alert.type) {
-        intensityDisplay = alert.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      } else {
-        intensityDisplay = 'Alert';
-      }
-      
-      // Build details based on type
-      let detailsHTML = '';
-      if (alert.type === 'earthquake') {
-        detailsHTML = `<span>${alert.distanceKm} km from ${alert.locationName || 'you'}</span>`;
-        const mmiDesc = getMmiDescription(alert.localMMI);
-        detailsHTML += `<span>•</span><span>Depth: ${alert.depth}km</span><span>•</span><span>Felt: ${mmiDesc}</span>`;
-      } else if (alert.type === 'severe_weather') {
-        // For weather alerts, show source and event type
-        const eventLabel = alert.eventType ? alert.eventType.replace(/_/g, ' ') : '';
-        detailsHTML = `<span>${alert.source || 'Weather Service'}</span>`;
-        if (eventLabel && eventLabel !== 'weather') {
-          detailsHTML += `<span>•</span><span>${eventLabel}</span>`;
-        }
-      } else if (alert.distanceKm !== undefined) {
-        detailsHTML = `<span>${alert.distanceKm} km from ${alert.locationName || 'you'}</span>`;
-      } else {
-        detailsHTML = `<span>${alert.source || alert.locationName || ''}</span>`;
-      }
-      
-      return `
-        <div class="alert-item ${levelClass}" data-id="${alert.id}">
-          <div class="alert-item-header">
-            <span class="alert-item-mag">${levelEmoji} ${typeEmoji} ${intensityDisplay}</span>
-            <span class="alert-item-time">${timeAgo}</span>
-          </div>
-          <div class="alert-item-place">${alert.place || 'Unknown location'}</div>
-          <div class="alert-item-details">
-            ${detailsHTML}
-          </div>
-          ${alert.tsunami ? '<div class="alert-item-tsunami">⚠️ Tsunami Warning</div>' : ''}
-        </div>
-      `;
-    }).join('');
-    
+
     alertsContent.innerHTML = `
-      <div class="alerts-scroll">${alertsHTML}</div>
+      <div class="alerts-scroll">${recentAlerts.map(renderAlertItem).join('')}</div>
     `;
-    
+
   } catch (err) {
     console.error('Error loading alerts:', err);
     alertsContent.innerHTML = `
@@ -2195,21 +2146,8 @@ function showAlertBanner(alert) {
   }
   
   const levelClass = `alert-banner-${alert.alertLevel}`;
-  const levelEmoji = {
-    critical: '🔴',
-    high: '🟠',
-    moderate: '🟡'
-  }[alert.alertLevel] || '🟡';
-  
-  const typeEmoji = {
-    earthquake: '🌍',
-    tsunami: '🌊',
-    volcano: '🌋',
-    hurricane: '🌀',
-    wildfire: '🔥',
-    tornado: '🌪️',
-    severe_weather: '⛈️'
-  }[alert.type] || '⚠️';
+  const levelEmoji = ALERT_LEVEL_EMOJIS[alert.alertLevel] || '🟡';
+  const typeEmoji = ALERT_TYPE_EMOJIS[alert.type] || '⚠️';
   
   const timeAgo = formatAlertTimeAgo(alert.time);
   
