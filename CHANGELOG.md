@@ -2,7 +2,7 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
-## [1.2.0] - 2026-02-04
+## [1.2.0] - 2026-02-09
 
 ### Fixed
 - Tide data cache was single-location only, causing cache thrashing with multiple cities. Every 15-minute refresh cycle re-fetched tides for all cities (2 API calls each), exhausting the Stormglass free tier (10 requests/day) within hours. Converted to per-location cache map so each city's tide data is stored independently and persists for the full day.

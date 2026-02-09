@@ -54,7 +54,7 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 ## Installation
 
 ### From Chrome Web Store
-*(Coming soon)*
+[Install Weather Clock](https://chromewebstore.google.com/detail/weather-clock/oljchkgkfkoennglohjhicakebnnjcca)
 
 ### Manual Installation (Developer Mode)
 1. Download or clone this repository
