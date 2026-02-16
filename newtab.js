@@ -1124,10 +1124,16 @@ function buildTideSectionHTML(tideData, allHourTimes) {
 }
 
 // Render 16-day extended forecast grid
-function buildExtendedForecastHTML(daily) {
+function buildExtendedForecastHTML(daily, cityTimezone) {
+  // Get today's date in the city's timezone (not the user's local timezone)
+  const nowInCity = new Date(new Date().toLocaleString('en-US', { timeZone: cityTimezone }));
+  const cityToday = new Date(nowInCity.getFullYear(), nowInCity.getMonth(), nowInCity.getDate());
   return daily.time.map((date, i) => {
-    const dayDate = new Date(date);
-    const dayName = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : dayDate.toLocaleDateString('en-US', { weekday: 'short' });
+    // Parse YYYY-MM-DD as local date (not UTC) to avoid timezone shift
+    const [y, m, d] = date.split('-').map(Number);
+    const dayDate = new Date(y, m - 1, d);
+    const diff = Math.round((dayDate - cityToday) / 86400000);
+    const dayName = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : dayDate.toLocaleDateString('en-US', { weekday: 'short' });
     const dayNum = dayDate.getDate();
     const maxT = convertTemp(daily.temperature_2m_max[i]);
     const minT = convertTemp(daily.temperature_2m_min[i]);
@@ -1238,7 +1244,7 @@ function displayWeather(data, locationName, tideData = null, airQualityData = nu
   );
   const hourlyHTML = buildHourlyForecastHTML(forecastItems);
   const { tideContent, tideNextHTML } = buildTideSectionHTML(tideData, allHourTimes);
-  const extendedHTML = buildExtendedForecastHTML(daily);
+  const extendedHTML = buildExtendedForecastHTML(daily, cityTimezone);
   
   // Build the 3D cube with three faces (Tides, Extended, Alerts)
   const tideHTML = `

@@ -2,6 +2,12 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.2.1] - 2026-02-16
+
+### Fixed
+- Extended forecast showed wrong day labels across timezones. `new Date("YYYY-MM-DD")` was parsed as UTC midnight, shifting dates back one day in negative-offset timezones (e.g., Americas). Now parsed as local date via manual string splitting.
+- Extended forecast "Today"/"Tomorrow" labels were based on the user's local timezone instead of the viewed city's timezone. Auckland (UTC+13) showing Feb 17 would still label it "Tomorrow" from an Argentina perspective. Now uses the city's own timezone via `toLocaleString` with the `timeZone` option.
+
 ## [1.2.0] - 2026-02-09
 
 ### Fixed
