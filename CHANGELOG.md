@@ -2,6 +2,12 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.3.0] - 2026-03-17
+
+### Added
+- Default tab setting: users can choose which tab (Tides, Extended Forecast, or Alerts) is shown by default when opening a new tab. Configurable in the settings panel.
+- Default changed from Tides to Extended Forecast.
+
 ## [1.2.1] - 2026-02-16
 
 ### Fixed

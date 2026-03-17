@@ -79,7 +79,8 @@ let settings = {
   stormglassApiKey: '',
   showAqiDetails: false,
   weatherModel: 'auto',
-  savedCities: [] // Array of { name, lat, lon }
+  savedCities: [], // Array of { name, lat, lon }
+  defaultTab: 'forecast' // Default cube face: 'tides', 'forecast', or 'alerts'
 };
 
 // Max saved cities (excluding GPS)
@@ -149,6 +150,7 @@ function applySettings() {
   document.getElementById('weatherModel').value = settings.weatherModel || 'auto';
   document.getElementById('alertsEnabled').value = (settings.alertsEnabled !== false).toString();
   document.getElementById('alertLevel').value = settings.alertLevel || 'medium';
+  document.getElementById('defaultTab').value = settings.defaultTab || 'forecast';
   applyTheme(settings.theme);
 }
 
@@ -1247,15 +1249,18 @@ function displayWeather(data, locationName, tideData = null, airQualityData = nu
   const extendedHTML = buildExtendedForecastHTML(daily, cityTimezone);
   
   // Build the 3D cube with three faces (Tides, Extended, Alerts)
+  const defTab = settings.defaultTab || 'forecast';
+  const cubeClass = defTab === 'forecast' ? 'show-forecast' : defTab === 'alerts' ? 'show-alerts' : '';
+  const tabActive = (face) => defTab === face ? ' active' : '';
   const tideHTML = `
     <div class="cube-container">
-      <div class="cube" id="tideForecastCube" data-face="tides">
+      <div class="cube ${cubeClass}" id="tideForecastCube" data-face="${defTab}">
         <div class="cube-face cube-face-tides">
           <div class="cube-header">
             <div class="cube-header-left">
-              <span class="cube-tab active" data-face="tides">🌊 Tides</span>
-              <span class="cube-tab" data-face="forecast">📅 Extended</span>
-              <span class="cube-tab" data-face="alerts">🚨 Alerts</span>
+              <span class="cube-tab${tabActive('tides')}" data-face="tides">🌊 Tides</span>
+              <span class="cube-tab${tabActive('forecast')}" data-face="forecast">📅 Extended</span>
+              <span class="cube-tab${tabActive('alerts')}" data-face="alerts">🚨 Alerts</span>
             </div>
             ${tideNextHTML}
           </div>
@@ -1264,9 +1269,9 @@ function displayWeather(data, locationName, tideData = null, airQualityData = nu
         <div class="cube-face cube-face-forecast">
           <div class="cube-header">
             <div class="cube-header-left">
-              <span class="cube-tab" data-face="tides">🌊 Tides</span>
-              <span class="cube-tab active" data-face="forecast">📅 Extended</span>
-              <span class="cube-tab" data-face="alerts">🚨 Alerts</span>
+              <span class="cube-tab${tabActive('tides')}" data-face="tides">🌊 Tides</span>
+              <span class="cube-tab${tabActive('forecast')}" data-face="forecast">📅 Extended</span>
+              <span class="cube-tab${tabActive('alerts')}" data-face="alerts">🚨 Alerts</span>
             </div>
           </div>
           <div class="forecast-scroll">
@@ -1276,9 +1281,9 @@ function displayWeather(data, locationName, tideData = null, airQualityData = nu
         <div class="cube-face cube-face-alerts">
           <div class="cube-header">
             <div class="cube-header-left">
-              <span class="cube-tab" data-face="tides">🌊 Tides</span>
-              <span class="cube-tab" data-face="forecast">📅 Extended</span>
-              <span class="cube-tab active" data-face="alerts">🚨 Alerts</span>
+              <span class="cube-tab${tabActive('tides')}" data-face="tides">🌊 Tides</span>
+              <span class="cube-tab${tabActive('forecast')}" data-face="forecast">📅 Extended</span>
+              <span class="cube-tab${tabActive('alerts')}" data-face="alerts">🚨 Alerts</span>
             </div>
           </div>
           <div class="alerts-content">
@@ -1435,6 +1440,11 @@ function displayWeather(data, locationName, tideData = null, airQualityData = nu
       </div>
     </div>
   `;
+
+  // Auto-load alerts if alerts tab is the default
+  if ((settings.defaultTab || 'forecast') === 'alerts') {
+    loadAlerts();
+  }
 }
 
 // Display error
@@ -1982,6 +1992,11 @@ document.getElementById('alertLevel').addEventListener('change', (e) => {
   settings.alertLevel = e.target.value;
   saveSettings();
   cacheLocationForAlerts();
+});
+
+document.getElementById('defaultTab').addEventListener('change', (e) => {
+  settings.defaultTab = e.target.value;
+  saveSettings();
 });
 
 // Theme selection handlers

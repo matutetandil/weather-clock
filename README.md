@@ -22,7 +22,7 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 ### 🌊 Tidal Information
 - High/low tide times and heights
 - Powered by Stormglass API
-- 3D cube interface for tide display
+- 3D cube interface with configurable default tab (Tides, Extended Forecast, or Alerts)
 
 ### 🌙 Astronomical Data
 - Moon phase with emoji display
