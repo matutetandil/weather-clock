@@ -1,5 +1,5 @@
 // Meteocons base URL (animated line style)
-const METEOCONS_BASE = 'https://basmilius.github.io/weather-icons/production/line/all';
+const METEOCONS_BASE = 'https://cdn.jsdelivr.net/npm/@meteocons/svg/line';
 
 // Weather code to Meteocons icon mapping (WMO codes)
 const weatherCodes = {
@@ -1877,18 +1877,27 @@ async function loadAllWeather() {
       let lat = settings.lat;
       let lon = settings.lon;
       let locationName = settings.locationName;
-      
-      if (!lat || !lon) {
+
+      try {
         const location = await getLocation();
-        lat = location.lat;
-        lon = location.lon;
-        settings.lat = lat;
-        settings.lon = lon;
-        locationName = await getLocationName(lat, lon);
-        settings.locationName = locationName;
-        saveSettings();
+        const newLat = location.lat;
+        const newLon = location.lon;
+        // Update if first time or location changed significantly (~1km)
+        if (!lat || !lon || Math.abs(newLat - lat) > 0.01 || Math.abs(newLon - lon) > 0.01) {
+          lat = newLat;
+          lon = newLon;
+          settings.lat = lat;
+          settings.lon = lon;
+          locationName = await getLocationName(lat, lon);
+          settings.locationName = locationName;
+          saveSettings();
+        }
+      } catch (geoErr) {
+        // GPS failed — fall back to saved coordinates if available
+        if (!lat || !lon) throw geoErr;
+        console.log('GPS refresh failed, using saved location:', geoErr.message);
       }
-      
+
       loadLocationWeather(lat, lon, locationName, gpsEl, true, currentSlide === 0);
     } catch (error) {
       console.error('GPS error:', error);

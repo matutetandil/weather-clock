@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Weather Clock",
-  "version": "1.3.0",
+  "version": "1.3.2",
   "description": "Beautiful new tab with clock, weather, and disaster alerts",
   "permissions": [
     "geolocation",

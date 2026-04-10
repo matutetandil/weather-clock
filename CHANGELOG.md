@@ -2,6 +2,16 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.3.2] - 2026-04-09
+
+### Fixed
+- All weather icons broken (404 errors). Meteocons moved from GitHub Pages to npm package. Migrated icon base URL from `basmilius.github.io/weather-icons/production/line/all` to `cdn.jsdelivr.net/npm/@meteocons/svg/line` (jsDelivr CDN). No icon name changes needed.
+
+## [1.3.1] - 2026-04-05
+
+### Fixed
+- GPS location was only fetched once on first install and never updated. Moving to a different city would keep showing the old location's weather. Now geolocation is refreshed on every page load; if coordinates shift by more than ~1km, the location name and weather update automatically. Saved coordinates are used as fallback if GPS fails.
+
 ## [1.3.0] - 2026-03-17
 
 ### Added

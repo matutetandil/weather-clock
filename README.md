@@ -75,7 +75,7 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 - [Open-Meteo](https://open-meteo.com/) - Weather data (free, no API key)
 - [Stormglass](https://stormglass.io/) - Tidal data
 - [Nominatim](https://nominatim.org/) - Geocoding
-- [Meteocons](https://bas.dev/work/meteocons) - Weather icons
+- [Meteocons](https://meteocons.com/) - Weather icons (via jsDelivr CDN)
 - Various government APIs for disaster alerts
 
 ## Development
@@ -108,7 +108,7 @@ MIT License - feel free to use and modify.
 
 ## Credits
 
-- Weather icons by [Bas Milius](https://bas.dev/work/meteocons)
+- Weather icons by [Bas Milius](https://meteocons.com/)
 - Weather data by [Open-Meteo](https://open-meteo.com/)
 ---
 
