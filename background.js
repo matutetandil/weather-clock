@@ -18,7 +18,8 @@ const APIS = {
   metserviceCap: 'https://alerts.metservice.com/cap/rss',
   
   // EUROPE - MeteoAlarm RSS feeds (entire Europe)
-  meteoalarmEurope: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-europe',
+  // Per-country Atom feeds; the aggregated Europe feed was retired upstream
+  meteoalarmFeedBase: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-',
   
   // CANADA - NAAD (National Alert Aggregation & Dissemination)
   canadaNAAD: 'https://rss.naad-adna.pelmorex.com/',
@@ -996,30 +997,145 @@ async function checkArgentinaSMN(locations, seenIds) {
 
 // ============================================
 // EUROPE METEOALARM CAP CHECKING
-// https://feeds.meteoalarm.org/ - 38 European countries
+// https://feeds.meteoalarm.org/ - per-country Atom feeds
 // ============================================
+// MeteoAlarm identifies the affected area by EMMA region code and name only:
+// its feeds, its per-alert CAP documents and its JSON API all omit geometry,
+// and the EDR API that supports spatial queries is restricted to members.
+// Without geometry the best we could do is country-level filtering, which
+// means 182 alerts for Spain or 540 for Germany regardless of where the user
+// actually is. So we ship the EMMA region polygons ourselves (see
+// data/emma-regions.json) and resolve the user's location locally.
+//
+// The aggregated Europe feed was retired upstream, so each country is
+// fetched from its own feed.
+const METEOALARM_FEED_SLUGS = {
+  AT: 'austria', BA: 'bosnia-herzegovina', BE: 'belgium', BG: 'bulgaria',
+  CY: 'cyprus', CZ: 'czechia', DE: 'germany', DK: 'denmark', EE: 'estonia',
+  ES: 'spain', FI: 'finland', FR: 'france', GR: 'greece', HR: 'croatia',
+  HU: 'hungary', IE: 'ireland', IL: 'israel', IS: 'iceland', IT: 'italy',
+  LT: 'lithuania', LU: 'luxembourg', LV: 'latvia', MD: 'moldova',
+  ME: 'montenegro', MK: 'republic-of-north-macedonia', MT: 'malta',
+  NL: 'netherlands', NO: 'norway', PL: 'poland', PT: 'portugal',
+  RO: 'romania', RS: 'serbia', SE: 'sweden', SI: 'slovenia', SK: 'slovakia'
+};
+
+// EMMA region polygons, loaded once on first European lookup
+let emmaRegionsCache = null;
+
+async function loadEmmaRegions() {
+  if (emmaRegionsCache) return emmaRegionsCache;
+  try {
+    const response = await fetch(chrome.runtime.getURL('data/emma-regions.json'));
+    const data = await response.json();
+    emmaRegionsCache = data.regions || [];
+    console.log(`Weather Clock: loaded ${emmaRegionsCache.length} EMMA regions`);
+  } catch (err) {
+    console.error('Weather Clock: could not load EMMA regions:', err);
+    emmaRegionsCache = [];
+  }
+  return emmaRegionsCache;
+}
+
+// Region names are compared across languages and spellings, so strip accents
+// and punctuation before matching. Mirrors the normalisation baked into the
+// dataset's `n` field.
+function normalizeRegionName(name) {
+  return (name || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+// Point-in-polygon over GeoJSON-ordered rings ([lon, lat])
+function pointInGeoRing(lat, lon, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (((yi > lat) !== (yj > lat)) &&
+        (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Resolve a location to the EMMA regions covering it. Returns null when the
+// point falls outside every region we have geometry for (open sea, or a
+// MeteoAlarm country missing from the dataset such as CH, UA or GB).
+async function findEmmaRegions(lat, lon) {
+  const regions = await loadEmmaRegions();
+  const codes = new Set();
+  const names = new Set();
+  let country = null;
+
+  for (const region of regions) {
+    const [minLon, minLat, maxLon, maxLat] = region.b;
+    if (lon < minLon || lon > maxLon || lat < minLat || lat > maxLat) continue;
+    if (!region.p.some(ring => pointInGeoRing(lat, lon, ring))) continue;
+
+    codes.add(region.c);
+    names.add(region.n);
+    country = country || region.k;
+  }
+
+  return country ? { country, codes, names } : null;
+}
+
 async function checkMeteoAlarm(locations, seenIds) {
   const alerts = [];
-  
+
   const euLocations = locations.filter(loc => isInEurope(loc.lat, loc.lon));
   if (euLocations.length === 0) return alerts;
-  
-  try {
-    const response = await fetch(APIS.meteoalarmEurope, {
-      headers: { 'Accept': 'application/atom+xml, application/xml, text/xml' }
-    });
-    if (!response.ok) {
-      console.log('Weather Clock: MeteoAlarm returned', response.status);
-      return alerts;
+
+  // Group locations by the country feed they need, so each feed is fetched once
+  const byFeed = new Map();
+  for (const location of euLocations) {
+    const region = await findEmmaRegions(location.lat, location.lon);
+    if (!region) {
+      console.log(`Weather Clock: MeteoAlarm has no region geometry covering ${location.name}`);
+      continue;
     }
-    
-    const text = await response.text();
-    const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
-    const items = [...text.matchAll(entryRegex)];
-    
-    for (const itemMatch of items) {
+    const slug = METEOALARM_FEED_SLUGS[region.country];
+    if (!slug) {
+      console.log(`Weather Clock: no MeteoAlarm feed for country ${region.country}`);
+      continue;
+    }
+    if (!byFeed.has(slug)) byFeed.set(slug, []);
+    byFeed.get(slug).push({ location, region });
+  }
+
+  for (const [slug, targets] of byFeed) {
+    try {
+      await checkMeteoAlarmFeed(slug, targets, seenIds, alerts);
+    } catch (err) {
+      console.error(`Weather Clock: MeteoAlarm ${slug} check error:`, err);
+    }
+  }
+
+  return alerts;
+}
+
+async function checkMeteoAlarmFeed(slug, targets, seenIds, alerts) {
+  // The feed server answers 406 to any specific XML Accept type, so ask for */*
+  const response = await fetch(`${APIS.meteoalarmFeedBase}${slug}`, {
+    headers: { 'Accept': '*/*' }
+  });
+  if (!response.ok) {
+    console.log(`Weather Clock: MeteoAlarm ${slug} returned`, response.status);
+    return;
+  }
+
+  const text = await response.text();
+  const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+  const items = [...text.matchAll(entryRegex)];
+  let matched = 0;
+
+  for (const itemMatch of items) {
       const itemXml = itemMatch[1];
-      
+
       const getTag = (tag) => {
         const match = itemXml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
         return match ? match[1].trim() : null;
@@ -1027,7 +1143,8 @@ async function checkMeteoAlarm(locations, seenIds) {
       
       const id = getTag('id') || getTag('cap:identifier');
       const title = getTag('title') || getTag('cap:event');
-      const summary = getTag('summary') || getTag('cap:areaDesc');
+      const areaDesc = getTag('cap:areaDesc');
+      const summary = getTag('summary') || areaDesc;
       const updated = getTag('updated') || getTag('cap:sent');
 
       if (!id || seenIds.includes(id)) continue;
@@ -1037,6 +1154,18 @@ async function checkMeteoAlarm(locations, seenIds) {
         status: getTag('cap:status'),
         msgType: getTag('cap:message_type')
       })) continue;
+
+      // Which EMMA region this warning covers. France renumbered its codes,
+      // so fall back to matching the region name when the code is unknown.
+      const entryCodes = [...itemXml.matchAll(/<value>([A-Z]{2}\d+)<\/value>/g)].map(m => m[1]);
+      const entryName = normalizeRegionName(areaDesc);
+
+      // Only keep the warning if it covers a region the user is actually in
+      const affected = targets.filter(({ region }) =>
+        entryCodes.some(code => region.codes.has(code)) ||
+        (entryName && region.names.has(entryName))
+      );
+      if (affected.length === 0) continue;
 
       const window = getAlertWindow({
         onset: getTag('cap:onset'),
@@ -1060,46 +1189,52 @@ async function checkMeteoAlarm(locations, seenIds) {
         else severity = 'Moderate';
       }
 
+      // Event wording varies by issuing service ("strong heat", "Heatwarning",
+      // "Moderate high-temperature warning"), so check the specific phenomena
+      // before the generic ones - thunderstorm entries often also say "gusts".
       if (title || summary) {
         const content = (title + ' ' + (summary || '')).toLowerCase();
-        if (content.includes('wind') || content.includes('viento')) eventType = 'wind';
-        else if (content.includes('rain') || content.includes('lluvia')) eventType = 'rain';
-        else if (content.includes('snow') || content.includes('nieve')) eventType = 'snow';
-        else if (content.includes('thunder') || content.includes('storm')) eventType = 'thunderstorm';
-        else if (content.includes('heat') || content.includes('calor')) eventType = 'heat';
-        else if (content.includes('cold') || content.includes('frost')) eventType = 'cold';
+        if (content.includes('thunder')) eventType = 'thunderstorm';
+        else if (content.includes('heat') || content.includes('high-temperature') ||
+                 content.includes('calor')) eventType = 'heat';
+        else if (content.includes('low-temperature') || content.includes('cold') ||
+                 content.includes('frost')) eventType = 'cold';
+        else if (content.includes('snow') || content.includes('nieve') ||
+                 content.includes('avalanche')) eventType = 'snow';
         else if (content.includes('flood')) eventType = 'flood';
+        else if (content.includes('rain') || content.includes('lluvia')) eventType = 'rain';
+        else if (content.includes('wind') || content.includes('gust') ||
+                 content.includes('gale') || content.includes('storm') ||
+                 content.includes('viento')) eventType = 'wind';
         else if (content.includes('fog')) eventType = 'fog';
+        else if (content.includes('coastal')) eventType = 'coastal';
+        else if (content.includes('forest') || content.includes('fire')) eventType = 'wildfire';
       }
 
-      for (const location of euLocations) {
-        const { alertLevel, relevance } = mapWeatherSeverity(severity);
+      const { alertLevel, relevance } = mapWeatherSeverity(severity);
+      if (alertLevel === 'info') continue;
+      matched++;
 
-        if (alertLevel !== 'info') {
-          alerts.push({
-            id,
-            type: 'severe_weather',
-            alertLevel,
-            severity,
-            eventType,
-            relevance,
-            place: title || 'Europe',
-            headline: title,
-            description: summary,
-            locationName: location.name,
-            source: 'MeteoAlarm',
-            url: 'https://www.meteoalarm.org',
-            ...window
-          });
-          break;
-        }
+      for (const { location } of affected) {
+        alerts.push({
+          id: `${id}-${location.name}`,
+          type: 'severe_weather',
+          alertLevel,
+          severity,
+          eventType,
+          relevance,
+          place: areaDesc || title || 'Europe',
+          headline: title,
+          description: summary,
+          locationName: location.name,
+          source: 'MeteoAlarm',
+          url: 'https://www.meteoalarm.org',
+          ...window
+        });
       }
-    }
-  } catch (err) {
-    console.error('Weather Clock: MeteoAlarm check error:', err);
   }
-  
-  return alerts;
+
+  console.log(`Weather Clock: MeteoAlarm ${slug} - ${matched}/${items.length} warnings cover the user's regions`);
 }
 
 // ============================================

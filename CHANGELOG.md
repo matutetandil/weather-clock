@@ -2,6 +2,26 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.5.0] - 2026-07-30
+
+### Fixed
+- European alerts (MeteoAlarm) had been silently dead. Two independent faults: the aggregated Europe feed was retired upstream, and the request sent `Accept: application/atom+xml, application/xml, text/xml`, which the feed server answers with 406 — it only accepts `*/*`. Europe now fetches per-country feeds with a working Accept header.
+- The cube tabs (Tides / Extended / Alerts) always showed the default tab as selected. Clicking a tab rotated the cube and switched the face but never moved the `active` class, which was applied once at render time from the `defaultTab` setting. Each face carries its own copy of the tab row, so the marker is now updated across every row in the cube.
+
+### Added
+- Region-level filtering for European alerts. MeteoAlarm identifies affected areas by EMMA region code and name only — its feeds, per-alert CAP documents and JSON API all omit geometry, and the EDR API supporting spatial queries is restricted to members. Country-level filtering alone would surface 182 warnings for Spain or 540 for Germany regardless of the user's location. The extension now bundles the EMMA region polygons (`data/emma-regions.json`, 2003 regions across 35 countries, ~1.3 MB) and resolves the user's location locally, keeping only warnings covering a region that contains them. Madrid goes from 182 warnings to 2.
+- Regions are matched by EMMA code *or* normalized region name, because France renumbered its codes (only 4 of 92 still match by code). Matching on either resolves 100% of the regions in every country feed tested.
+- Release packaging now includes `data/` and fails the build if the region dataset is missing from the ZIP, so Europe cannot silently break in production.
+
+### Changed
+- MeteoAlarm event types are detected from a wider vocabulary, since wording varies by issuing service ("strong heat", "Heatwarning", "Moderate high-temperature warning" are all heat). Thunderstorm is checked before wind, as thunderstorm warnings usually also mention gusts.
+
+### Known issues
+- Switzerland, Ukraine, the United Kingdom and Andorra publish through MeteoAlarm but are absent from the region dataset, so no alerts are shown for them. This is logged rather than failing silently.
+
+### Credits
+- European region geometry derived from [NiklasJordan/meteoalarm](https://github.com/NiklasJordan/meteoalarm) (MIT). Region data © MeteoAlarm / EUMETNET, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
 ## [1.4.0] - 2026-07-30
 
 ### Fixed

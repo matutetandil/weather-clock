@@ -18,7 +18,13 @@ jobs:
             newtab.html \
             newtab.js \
             background.js \
-            icons/
+            icons/ \
+            data/
+
+      - name: Verify bundled data is present
+        run: |
+          unzip -l extension.zip | grep -q 'data/emma-regions.json' \
+            || { echo "data/emma-regions.json missing from package - MeteoAlarm would silently return no alerts"; exit 1; }
 
       - name: Upload to Chrome Web Store
         run: |

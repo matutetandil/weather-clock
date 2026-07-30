@@ -41,7 +41,7 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 - Regional severe weather alerts:
   - 🇺🇸 USA (NWS)
   - 🇨🇦 Canada (NAAD)
-  - 🇪🇺 Europe (MeteoAlarm - 38 countries)
+  - 🇪🇺 Europe (MeteoAlarm - 35 countries, with region filtering)
   - 🇳🇿 New Zealand (GeoNet + MetService)
   - 🇦🇷 Argentina (SMN with polygon filtering)
   - 🇧🇷 Brazil (INMET)
@@ -56,9 +56,33 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 - Chrome desktop notifications
 - Badge showing active alert count (alerts in effect only)
 
-**Known limitation:** Europe (MeteoAlarm) is currently non-functional. The
-aggregated Europe feed was retired upstream and now returns 404/406; only
-per-country feeds remain, which require mapping coordinates to a country.
+### 🇪🇺 About the European alerts
+
+MeteoAlarm identifies the area a warning covers by EMMA region code and name
+only — its feeds, its per-alert CAP documents and its JSON API all omit
+geometry, and the EDR API that supports spatial queries is restricted to
+MeteoAlarm members and re-distributors. Filtering at country level alone
+would mean showing 182 warnings for Spain or 540 for Germany no matter where
+the user actually is.
+
+So the extension bundles the EMMA region polygons in `data/emma-regions.json`
+(2003 regions, 35 countries, ~1.3 MB) and resolves the user's location
+locally. A warning is kept only when it covers a region containing the user.
+France renumbered its EMMA codes, so regions are matched by code *or* by
+normalized name, which resolves 100% of the regions in every country feed
+tested.
+
+The dataset is derived from
+[NiklasJordan/meteoalarm](https://github.com/NiklasJordan/meteoalarm) (MIT),
+simplified with Douglas-Peucker at 0.005° and rounded to 3 decimals. Region
+data © MeteoAlarm / EUMETNET, licensed
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Validated against
+the full-resolution source over 1200 points: zero false positives, 1198/1200
+exact agreement.
+
+**Not covered:** Switzerland, Ukraine, the United Kingdom and Andorra publish
+through MeteoAlarm but are absent from the region dataset, so no alerts are
+shown there. This is logged rather than failing silently.
 
 ## Installation
 
@@ -104,6 +128,7 @@ git clone https://github.com/matutetandil/weather-clock.git
 ├── newtab.html        # Main UI
 ├── newtab.js          # Frontend logic
 ├── background.js      # Alert service worker
+├── data/              # Bundled EMMA region polygons for European alerts
 └── icons/             # Extension icons
 ```
 
