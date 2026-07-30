@@ -2046,12 +2046,22 @@ function filterAndDeduplicateAlerts(alerts, cityName) {
     ? alerts.filter(a => a.locationName === cityName)
     : alerts;
 
-  // Filter out old alerts (more than 6 hours for weather, 24h for earthquakes)
+  // Keep an alert while its validity window is open, however long ago it was
+  // issued. Only alerts without a window (earthquakes, hurricanes) fall back
+  // to an age cutoff: 24h for earthquakes, 6h for everything else.
   const now = Date.now();
   filtered = filtered.filter(a => {
+    if (a.endTime) return a.endTime > now;
     const ageHours = (now - a.time) / (1000 * 60 * 60);
     if (a.type === 'earthquake') return ageHours < 24;
     return ageHours < 6;
+  });
+
+  // Sort before deduplicating so that when the same kind of alert exists both
+  // in effect and upcoming, the one in effect is the copy that survives
+  filtered.sort((a, b) => {
+    if (!!a.isUpcoming !== !!b.isUpcoming) return a.isUpcoming ? 1 : -1;
+    return b.time - a.time;
   });
 
   // Deduplicate by type + headline
@@ -2063,8 +2073,6 @@ function filterAndDeduplicateAlerts(alerts, cityName) {
     return true;
   });
 
-  // Sort by time (newest first), validate, and limit
-  filtered.sort((a, b) => b.time - a.time);
   return filtered.filter(a => a.type && a.id).slice(0, 10);
 }
 
@@ -2073,7 +2081,7 @@ function renderAlertItem(alert) {
   const levelClass = `alert-level-${alert.alertLevel}`;
   const levelEmoji = ALERT_LEVEL_EMOJIS[alert.alertLevel] || 'ℹ️';
   const typeEmoji = ALERT_TYPE_EMOJIS[alert.type] || '⚠️';
-  const timeAgo = formatAlertTimeAgo(alert.time);
+  const timing = formatAlertTiming(alert);
 
   // Build magnitude/intensity display based on type
   let intensityDisplay = '';
@@ -2111,11 +2119,16 @@ function renderAlertItem(alert) {
     ? `<a class="alert-item-link" href="${alert.url}" target="_blank" rel="noopener noreferrer">More info ↗</a>`
     : '';
 
+  // Alerts that have not started yet are dimmed and badged, so they never read
+  // as something happening right now
+  const upcomingClass = alert.isUpcoming ? ' alert-upcoming' : '';
+  const upcomingBadge = alert.isUpcoming ? '<span class="alert-item-upcoming">Upcoming</span>' : '';
+
   return `
-    <div class="alert-item ${levelClass}" data-id="${alert.id}">
+    <div class="alert-item ${levelClass}${upcomingClass}" data-id="${alert.id}">
       <div class="alert-item-header">
-        <span class="alert-item-mag">${levelEmoji} ${typeEmoji} ${intensityDisplay}</span>
-        <span class="alert-item-time">${timeAgo}</span>
+        <span class="alert-item-mag">${levelEmoji} ${typeEmoji} ${intensityDisplay}${upcomingBadge}</span>
+        <span class="alert-item-time">${timing}</span>
       </div>
       <div class="alert-item-place">${alert.place || 'Unknown location'}</div>
       <div class="alert-item-details">
@@ -2185,6 +2198,26 @@ function formatAlertTimeAgo(timestamp) {
   return `${days}d ago`;
 }
 
+// Timing label for an alert: when it was issued, or when it takes effect if
+// it has not started yet. Never show "X ago" for something still to come.
+function formatAlertTiming(alert) {
+  if (!alert.isUpcoming) return formatAlertTimeAgo(alert.time);
+
+  const startsAt = new Date(alert.startTime);
+  const hours = (alert.startTime - Date.now()) / (1000 * 60 * 60);
+  const clockTime = startsAt.toLocaleTimeString([], {
+    hour: settings.timeFormat === '12' ? 'numeric' : '2-digit',
+    minute: '2-digit',
+    hour12: settings.timeFormat === '12'
+  });
+
+  // Within the hour, a countdown is clearer than a clock time
+  if (hours < 1) return `starts in ${Math.max(1, Math.round(hours * 60))}m`;
+
+  const isToday = startsAt.toDateString() === new Date().toDateString();
+  return isToday ? `starts ${clockTime}` : `starts tomorrow ${clockTime}`;
+}
+
 // Get MMI description
 function getMmiDescription(mmi) {
   if (!mmi || mmi < 2) return 'Not felt';
@@ -2213,8 +2246,8 @@ function showAlertBanner(alert) {
   const levelEmoji = ALERT_LEVEL_EMOJIS[alert.alertLevel] || '🟡';
   const typeEmoji = ALERT_TYPE_EMOJIS[alert.type] || '⚠️';
   
-  const timeAgo = formatAlertTimeAgo(alert.time);
-  
+  const timing = formatAlertTiming(alert);
+
   // Build title based on type
   let title = '';
   if (alert.type === 'earthquake') {
@@ -2245,7 +2278,7 @@ function showAlertBanner(alert) {
       <span class="alert-banner-icon">${levelEmoji}</span>
       <div class="alert-banner-text">
         <div class="alert-banner-title">${title}${titleSuffix}</div>
-        <div class="alert-banner-sub">${alert.place || 'Unknown'} • ${timeAgo}</div>
+        <div class="alert-banner-sub">${alert.place || 'Unknown'} • ${timing}</div>
       </div>
       <button class="alert-banner-dismiss">✕</button>
     </div>
@@ -2258,10 +2291,12 @@ async function checkForNewAlerts() {
     const response = await chrome.runtime.sendMessage({ action: 'getAlerts' });
     const alerts = response?.alerts || [];
 
-    // Find alerts from the last 10 minutes that are high/critical and not dismissed
+    // Find alerts issued in the last 10 minutes that are high/critical, still
+    // within their validity window, and not dismissed
     const recentCritical = alerts.filter(a => {
+      if (a.endTime && a.endTime <= Date.now()) return false;
       const minutesAgo = (Date.now() - a.time) / 60000;
-      return minutesAgo < 10 &&
+      return minutesAgo >= 0 && minutesAgo < 10 &&
         (a.alertLevel === 'critical' || a.alertLevel === 'high') &&
         !dismissedBannerIds.has(a.id);
     });

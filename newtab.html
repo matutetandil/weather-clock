@@ -1331,6 +1331,25 @@
       opacity: 0.5;
     }
 
+    /* Alerts that have not taken effect yet: dimmed, so they read as a
+       heads-up rather than as something happening right now */
+    .alert-item.alert-upcoming {
+      opacity: 0.65;
+      border-left-style: dashed;
+    }
+
+    .alert-item-upcoming {
+      font-size: 9px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 1px 5px;
+      margin-left: 6px;
+      border-radius: 4px;
+      background: rgba(128, 128, 128, 0.25);
+      vertical-align: 1px;
+    }
+
     .alert-item-place {
       font-size: 11px;
       opacity: 0.8;

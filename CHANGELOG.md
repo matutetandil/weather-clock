@@ -2,6 +2,31 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.4.0] - 2026-07-30
+
+### Fixed
+- Alerts were shown without ever checking whether they were in effect. The CAP `expires` field was parsed and stored but never read anywhere, and `onset` was used as the alert's timestamp, so an alert scheduled for a future day displayed as if it were happening now. Reported case: Pehuajó (Argentina) showed a yellow Thunderstorm alert while the SMN map showed the area green — the alert's onset was the *following* day at 15:00. Every alert is now filtered by its validity window; expired alerts are dropped and future ones are labelled.
+- Alert retention used a fixed age cutoff (6h weather / 24h earthquakes) based on `onset`. Alerts with a future onset survived past their end, and long-running alerts issued more than 6 hours ago disappeared while still in effect. Retention now follows the alert's own `expires`, falling back to the age cutoff only for alerts without a window (earthquakes, hurricanes).
+- The toolbar badge and the in-page alert banner counted alerts with a future onset as active (`Date.now() - time` was negative, passing the "recent" test). Both now exclude alerts that have not started.
+- CAP cancellations (`msgType=Cancel`) and non-live messages (`status=Test/Exercise/Draft`) were treated as active alerts. Now discarded across all sources. For Canada this also covers entries titled "... ended" / "... terminée", which the feed keeps publishing after the event is over.
+- Argentina SMN: only the first `<polygon>` and the first `<info>` block of each CAP document were read. Alerts carrying several info blocks (different timeframes or severities) or several areas were matched against the wrong geometry and reported with the wrong severity and validity window. Every info block and area is now checked, and severity/timing come from the block that actually covers the location.
+- Argentina SMN: `Nevadas` (the SMN's actual wording) was not recognised as snow and fell back to the generic "clima" label.
+- Brazil INMET: severity was read from the title, where `Perigo Potencial` (yellow, the lowest tier) matched the check for `perigo` and was reported as Severe. Tiers are now matched longest-first: Grande Perigo → Severe, Perigo → Moderate, Perigo Potencial → Minor.
+- Chile MeteoChile and NZ MetService: severity was guessed from the RSS title, where `alerta` matched every Chilean item regardless of tier. Both now fetch the linked CAP document and use the severity the issuer declared, along with its polygon and validity window.
+- Alerts that had not started could reach a Chrome notification worded "X min ago". Notifications now read "starts in 3h" for upcoming alerts.
+
+### Added
+- Shared CAP parsing layer (`parseCapDocument`, `fetchCapDocument`, `findCapInfoForLocation`, `getAlertWindow`, `isCapMessageLive`) used by every source, replacing per-source ad-hoc regex parsing.
+- "Upcoming" badge and dimmed styling for alerts that have not taken effect yet, with a "starts 15:00" / "starts tomorrow 15:00" label instead of a misleading "X ago".
+- Polygon-based location filtering for Chile and New Zealand, which previously applied every national alert to every location in the country.
+
+### Changed
+- Alerts starting more than 24 hours out are no longer surfaced at all.
+- Chile and New Zealand now show fewer alerts, because their lowest tier (Chilean "Aviso", NZ "Watch" — both `severity=Minor` in CAP) is hidden like every other Minor alert, and alerts are matched to the user's polygon instead of the whole country.
+
+### Known issues
+- Europe (MeteoAlarm) is non-functional: the aggregated Europe feed (`meteoalarm-legacy-atom-europe`) was retired upstream and returns 404/406. Only per-country feeds remain, so restoring Europe requires resolving coordinates to a country. The parsing was updated to read the inline `cap:*` fields these feeds provide, but the source stays dark until the feed selection is fixed.
+
 ## [1.3.2] - 2026-04-09
 
 ### Fixed

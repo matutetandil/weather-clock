@@ -45,11 +45,20 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
   - 🇳🇿 New Zealand (GeoNet + MetService)
   - 🇦🇷 Argentina (SMN with polygon filtering)
   - 🇧🇷 Brazil (INMET)
-  - 🇨🇱 Chile (MeteoChile)
+  - 🇨🇱 Chile (MeteoChile with polygon filtering)
   - 🌀 Tropical storms (NOAA NHC)
+- Only alerts in effect are shown. Every alert is filtered by its CAP validity
+  window (`onset`..`expires`), so what you see matches the issuing authority's
+  own map. Cancellations and test messages are discarded.
+- Alerts starting within the next 24 hours appear dimmed and labelled
+  "Upcoming — starts tomorrow 15:00", never as if they were already active.
 - Per-city alert toggles
 - Chrome desktop notifications
-- Badge showing active alert count
+- Badge showing active alert count (alerts in effect only)
+
+**Known limitation:** Europe (MeteoAlarm) is currently non-functional. The
+aggregated Europe feed was retired upstream and now returns 404/406; only
+per-country feeds remain, which require mapping coordinates to a country.
 
 ## Installation
 

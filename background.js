@@ -190,6 +190,14 @@ function formatTimeAgo(minutes) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+// Time until an alert that has not started yet takes effect
+function formatLeadTime(minutes) {
+  if (minutes < 60) return `${Math.max(1, Math.round(minutes))} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
 function formatDistance(km) {
   if (km < 1) return '< 1 km';
   if (km < 100) return `${Math.round(km)} km`;
@@ -238,6 +246,60 @@ function mapLocalMMI(localMMI, magnitude) {
   if (localMMI >= 4) return { alertLevel: 'moderate', relevance: 30 };
   if (magnitude >= 7) return { alertLevel: 'moderate', relevance: 25 };
   return { alertLevel: 'info', relevance: 5 };
+}
+
+// ============================================
+// ALERT VALIDITY WINDOW
+// ============================================
+// Every CAP alert carries a validity window (onset/effective .. expires).
+// An alert only reflects what the issuing authority shows on its own map while
+// that window is open: an alert that already expired, or one whose onset is
+// days away, is not "happening now". We keep alerts in effect right now plus
+// those starting within UPCOMING_LEAD_MS so the user still gets advance
+// notice - those are flagged isUpcoming so the UI can label them as such
+// instead of implying they are active.
+const UPCOMING_LEAD_MS = 24 * 60 * 60 * 1000;
+
+// Parse a CAP timestamp into epoch ms, or null when absent/unparseable.
+function parseCapTime(value) {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return isNaN(time) ? null : time;
+}
+
+// Resolve an alert's validity window into the timing fields an alert carries.
+// Returns null when the alert must be dropped (window closed, or onset too
+// far out to be actionable).
+function getAlertWindow({ onset, effective, expires, sent }, now = Date.now()) {
+  const startTime = parseCapTime(onset) ?? parseCapTime(effective) ?? parseCapTime(sent);
+  const endTime = parseCapTime(expires);
+  const issuedTime = parseCapTime(sent) ?? parseCapTime(effective) ?? startTime ?? now;
+
+  // Window already closed - the authority no longer shows this alert
+  if (endTime !== null && endTime <= now) return null;
+
+  // Onset too far out to be worth surfacing as an alert
+  if (startTime !== null && startTime - now > UPCOMING_LEAD_MS) return null;
+
+  const isUpcoming = startTime !== null && startTime > now;
+
+  return {
+    time: issuedTime,
+    startTime: startTime ?? issuedTime,
+    endTime,
+    isUpcoming,
+    startsInMinutes: isUpcoming ? Math.round((startTime - now) / 60000) : 0,
+    minutesAgo: Math.round((now - issuedTime) / 60000)
+  };
+}
+
+// CAP messages that must never surface as a live alert: cancellations,
+// acknowledgements/errors, and anything that is not a real-world event
+// (Test, Exercise, Draft, System).
+function isCapMessageLive({ status, msgType }) {
+  if (msgType && msgType !== 'Alert' && msgType !== 'Update') return false;
+  if (status && status !== 'Actual') return false;
+  return true;
 }
 
 // Elevate an alert level by one step (e.g., for tsunami/tornado warnings).
@@ -410,8 +472,22 @@ async function checkNWSAlerts(locations, seenIds) {
       
       const id = props.id || `nws-${props.event}-${props.onset}`;
       if (seenIds.includes(id)) continue;
+
+      // Skip cancellations and test messages
+      if (!isCapMessageLive({ status: props.status, msgType: props.messageType })) continue;
+
+      // Skip alerts outside their validity window. NWS uses `ends` for the
+      // event window and `expires` for the message itself; prefer `ends`.
+      const window = getAlertWindow({
+        onset: props.onset,
+        effective: props.effective,
+        expires: props.ends || props.expires,
+        sent: props.sent
+      });
+      if (!window) continue;
+
       seenIds.push(id);
-      
+
       // Get alert geometry center or use affected zones
       let alertLat = null, alertLon = null;
       
@@ -426,7 +502,6 @@ async function checkNWSAlerts(locations, seenIds) {
       
       if (!alertLat || !alertLon) continue;
       
-      const time = new Date(props.onset || props.effective || props.sent).getTime();
       const severity = props.severity; // Extreme, Severe, Moderate, Minor
       const certainty = props.certainty; // Observed, Likely, Possible
       
@@ -441,7 +516,6 @@ async function checkNWSAlerts(locations, seenIds) {
       // Check relevance for USA locations
       for (const location of usaLocations) {
         const distanceKm = calculateDistance(location.lat, location.lon, alertLat, alertLon);
-        const minutesAgo = (Date.now() - time) / 60000;
 
         let { alertLevel, relevance } = mapWeatherSeverity(severity);
         // Tsunami/tornado warnings elevate one step
@@ -455,17 +529,16 @@ async function checkNWSAlerts(locations, seenIds) {
             type,
             alertLevel,
             distanceKm: Math.round(distanceKm),
-            minutesAgo: Math.round(minutesAgo),
             relevance,
             place: props.areaDesc || props.headline || eventType,
             headline: props.headline,
             severity,
-            time,
             locationName: location.name,
             eventLat: alertLat,
             eventLon: alertLon,
             nwsEvent: eventType,
-            url: `https://alerts.weather.gov`
+            url: `https://alerts.weather.gov`,
+            ...window
           });
           break;
         }
@@ -598,38 +671,34 @@ async function checkMetServiceCAP(locations, seenIds) {
       const title = getTag('title');
       const description = getTag('description');
       const link = getTag('link');
-      const pubDate = getTag('pubDate');
-      
+
       if (!guid || seenIds.includes(guid)) continue;
-      seenIds.push(guid);
-      
-      // Determine alert type and severity from headline
-      let type = 'severe_weather';
-      let severity = 'Moderate';
+      if (!link) continue;
+
+      // The RSS item carries no validity window or severity, so fetch the CAP
+      // document it links to. Without it we cannot tell a warning in effect
+      // from one that expired or that starts days from now.
+      const doc = await fetchCapDocument(link);
+      if (!doc || !isCapMessageLive(doc)) continue;
+
+      // Determine event type from the headline
       let eventType = 'weather';
-      
       if (title) {
         const lowerTitle = title.toLowerCase();
         if (lowerTitle.includes('rain')) eventType = 'rain';
         else if (lowerTitle.includes('snow')) eventType = 'snow';
         else if (lowerTitle.includes('wind')) eventType = 'wind';
         else if (lowerTitle.includes('thunderstorm')) eventType = 'thunderstorm';
-        
-        if (lowerTitle.includes('red') || lowerTitle.includes('severe thunderstorm warning')) {
-          severity = 'Severe';
-        } else if (lowerTitle.includes('orange') || lowerTitle.includes('warning')) {
-          severity = 'Moderate';
-        } else if (lowerTitle.includes('watch')) {
-          severity = 'Minor';
-        }
       }
-      
-      const time = pubDate ? new Date(pubDate).getTime() : Date.now();
-      const minutesAgo = (Date.now() - time) / 60000;
-      
-      // For CAP alerts, we apply to all NZ locations since polygon parsing is complex
-      // The alert is relevant if user is anywhere in NZ
+
       for (const location of nzLocations) {
+        const info = findCapInfoForLocation(doc, location);
+        if (!info) continue;
+
+        const window = getAlertWindow(info);
+        if (!window) continue;
+
+        const severity = info.severity || 'Moderate';
         let { alertLevel, relevance } = mapWeatherSeverity(severity);
         // Severe thunderstorm warnings elevate one step
         if (eventType === 'thunderstorm' && severity === 'Severe') {
@@ -637,21 +706,21 @@ async function checkMetServiceCAP(locations, seenIds) {
         }
 
         if (alertLevel !== 'info') {
+          seenIds.push(guid);
           alerts.push({
             id: guid,
             type: 'severe_weather',
             alertLevel,
             severity,
             eventType,
-            minutesAgo: Math.round(minutesAgo),
             relevance,
-            place: title || 'New Zealand',
-            headline: title,
-            description: description,
-            time,
+            place: info.areaDesc || title || 'New Zealand',
+            headline: info.headline || title,
+            description: info.description || description,
             locationName: location.name,
             source: 'MetService',
-            url: link
+            url: link,
+            ...window
           });
           break; // Only one alert per CAP item
         }
@@ -665,10 +734,10 @@ async function checkMetServiceCAP(locations, seenIds) {
 }
 
 // ============================================
-// ARGENTINA SMN CAP CHECKING
-// https://ssl.smn.gob.ar/CAP/AR.php - Servicio Meteorológico Nacional
-// Fetches RSS feed, then individual CAP XMLs for polygon intersection
+// CAP DOCUMENT PARSING
 // ============================================
+// Shared by every source that fetches full CAP XML (SMN, MetService,
+// MeteoChile). Service workers have no DOMParser, so we parse with regex.
 
 // Point-in-polygon algorithm (ray casting)
 function pointInPolygon(lat, lon, polygon) {
@@ -676,8 +745,8 @@ function pointInPolygon(lat, lon, polygon) {
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     const [yi, xi] = polygon[i];
     const [yj, xj] = polygon[j];
-    
-    if (((yi > lat) !== (yj > lat)) && 
+
+    if (((yi > lat) !== (yj > lat)) &&
         (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
       inside = !inside;
     }
@@ -685,8 +754,8 @@ function pointInPolygon(lat, lon, polygon) {
   return inside;
 }
 
-// Parse SMN polygon string "lat,lon lat,lon ..." into array [[lat,lon], ...]
-function parseSMNPolygon(polygonStr) {
+// Parse a CAP polygon string "lat,lon lat,lon ..." into [[lat, lon], ...]
+function parseCapPolygon(polygonStr) {
   if (!polygonStr) return null;
   const points = polygonStr.trim().split(/\s+/);
   const coords = [];
@@ -699,66 +768,99 @@ function parseSMNPolygon(polygonStr) {
   return coords.length >= 3 ? coords : null;
 }
 
-// Fetch individual CAP XML and check if location is within polygon
-async function fetchSMNAlertDetail(alertUrl, location) {
+// Parse a CAP XML document into its alert-level fields plus every <info>
+// block. A single alert can carry several info blocks (different timeframes,
+// severities or languages) and each can carry several <area> polygons, so
+// severity and timing must be read from the block that actually covers the
+// user - not from whichever appears first in the document.
+function parseCapDocument(text) {
+  const getTag = (xml, tag) => {
+    const match = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
+    return match ? match[1].trim() : null;
+  };
+
+  const getTagContent = (xml, tag) => {
+    const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
+    return match ? match[1].trim() : null;
+  };
+
+  const sent = getTag(text, 'sent');
+
+  const infos = [...text.matchAll(/<info>([\s\S]*?)<\/info>/g)].map(m => m[1]).map(info => ({
+    language: getTag(info, 'language'),
+    event: getTag(info, 'event'),
+    headline: getTag(info, 'headline'),
+    description: getTagContent(info, 'description'),
+    severity: getTag(info, 'severity'),
+    urgency: getTag(info, 'urgency'),
+    certainty: getTag(info, 'certainty'),
+    onset: getTag(info, 'onset'),
+    effective: getTag(info, 'effective'),
+    expires: getTag(info, 'expires'),
+    areaDesc: getTag(info, 'areaDesc'),
+    sent,
+    polygons: [...info.matchAll(/<polygon>([^<]+)<\/polygon>/g)]
+      .map(m => parseCapPolygon(m[1]))
+      .filter(Boolean)
+  }));
+
+  return {
+    status: getTag(text, 'status'),
+    msgType: getTag(text, 'msgType'),
+    sent,
+    infos
+  };
+}
+
+// Fetch and parse a CAP XML document. Returns null on any failure.
+async function fetchCapDocument(url) {
   try {
     // Rewrite http:// to https:// to avoid CORS-blocked redirects
-    const url = alertUrl.replace(/^http:\/\//, 'https://');
-
-    const response = await fetch(url, {
+    const response = await fetch(url.replace(/^http:\/\//, 'https://'), {
       headers: { 'Accept': 'application/xml, text/xml' }
     });
     if (!response.ok) return null;
-
-    const text = await response.text();
-
-    // Parse polygon
-    const polygonMatch = text.match(/<polygon>([^<]+)<\/polygon>/);
-    if (!polygonMatch) {
-      return null;
-    }
-
-    const polygon = parseSMNPolygon(polygonMatch[1]);
-    if (!polygon) {
-      return null;
-    }
-
-    // Check if user location is inside polygon
-    const isInside = pointInPolygon(location.lat, location.lon, polygon);
-
-    if (!isInside) {
-      return null; // User not in affected area
-    }
-
-    // Match found - details logged in summary at end of checkArgentinaSMN
-    
-    // Parse other fields
-    const getTag = (tag) => {
-      const match = text.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
-      return match ? match[1].trim() : null;
-    };
-    
-    const getTagContent = (tag) => {
-      const match = text.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
-      return match ? match[1].trim() : null;
-    };
-    
-    return {
-      event: getTag('event'),
-      headline: getTag('headline'),
-      description: getTagContent('description'),
-      severity: getTag('severity'),
-      urgency: getTag('urgency'),
-      certainty: getTag('certainty'),
-      onset: getTag('onset'),
-      expires: getTag('expires'),
-      sent: getTag('sent'),
-      polygon
-    };
+    return parseCapDocument(await response.text());
   } catch (err) {
-    console.error('Weather Clock: Error fetching SMN alert detail:', err);
+    console.error('Weather Clock: Error fetching CAP document:', url, err);
     return null;
   }
+}
+
+// Pick the info block covering a location, or null when none does.
+// Documents that carry no polygons at all fall back to their first info block,
+// since there is nothing to match against - pass requirePolygon to drop those
+// instead, for feeds where an alert without geometry means "not for you".
+function findCapInfoForLocation(doc, location, { requirePolygon = false } = {}) {
+  const withPolygons = doc.infos.filter(info => info.polygons.length > 0);
+  if (withPolygons.length === 0) {
+    return requirePolygon ? null : (doc.infos[0] || null);
+  }
+
+  for (const info of withPolygons) {
+    const match = info.polygons.find(p => pointInPolygon(location.lat, location.lon, p));
+    if (match) return { ...info, polygon: match };
+  }
+  return null;
+}
+
+// ============================================
+// ARGENTINA SMN CAP CHECKING
+// https://ssl.smn.gob.ar/CAP/AR.php - Servicio Meteorológico Nacional
+// Fetches RSS feed, then individual CAP XMLs for polygon intersection
+// ============================================
+
+// Fetch individual CAP XML and check if location is within polygon
+async function fetchSMNAlertDetail(alertUrl, location) {
+  const doc = await fetchCapDocument(alertUrl);
+  if (!doc) return null;
+
+  // Cancellations and test messages must never surface as live alerts
+  if (!isCapMessageLive(doc)) return null;
+
+  // SMN always geocodes its alerts, so a document we cannot match to the
+  // user's polygon is an alert for somewhere else
+  return findCapInfoForLocation(doc, location, { requirePolygon: true });
 }
 
 async function checkArgentinaSMN(locations, seenIds) {
@@ -830,12 +932,21 @@ async function checkArgentinaSMN(locations, seenIds) {
           if (eventType.includes('tormenta') || eventType.includes('granizo')) phenomenon = 'tormenta';
           else if (eventType.includes('viento')) phenomenon = 'viento';
           else if (eventType.includes('lluvia')) phenomenon = 'lluvia';
-          else if (eventType.includes('nieve')) phenomenon = 'nieve';
+          else if (eventType.includes('nieve') || eventType.includes('nevada')) phenomenon = 'nieve';
           else if (eventType.includes('calor') || eventType.includes('temperatura')) phenomenon = 'calor';
           else if (eventType.includes('frio') || eventType.includes('helada')) phenomenon = 'frio';
           
           const alertTypeKey = `${phenomenon}-${severity}`;
-          
+
+          // Drop alerts that already expired or start too far ahead. Checked
+          // before seenIds is touched so an alert that is merely too early
+          // still gets picked up once its onset comes within range.
+          const window = getAlertWindow(detail);
+          if (!window) return null;
+
+          const { alertLevel, relevance } = mapWeatherSeverity(severity);
+          if (alertLevel === 'info') return null;
+
           // Check for duplicates per location
           if (!seenAlertTypes.has(location.name)) {
             seenAlertTypes.set(location.name, new Set());
@@ -844,34 +955,24 @@ async function checkArgentinaSMN(locations, seenIds) {
             return null; // Already have this type of alert for this location
           }
           seenAlertTypes.get(location.name).add(alertTypeKey);
-          
+
           // Mark as seen
           seenIds.push(id);
-          
-          // Calculate time and relevance
-          const time = detail.onset ? new Date(detail.onset).getTime() : 
-                       detail.sent ? new Date(detail.sent).getTime() : Date.now();
-          const minutesAgo = (Date.now() - time) / 60000;
-          
-          const { alertLevel, relevance } = mapWeatherSeverity(severity);
-          if (alertLevel === 'info') return null;
-          
+
           return {
             id: `smn-${alertTypeKey}-${location.name}`,
             type: 'severe_weather',
             alertLevel,
             severity,
             eventType: phenomenon,
-            minutesAgo: Math.round(minutesAgo),
             relevance: Math.round(relevance * 10) / 10,
             place: detail.event || title,
             headline: detail.headline || title,
             description: detail.description || description,
-            time,
             locationName: location.name,
             source: 'SMN Argentina',
-            expires: detail.expires ? new Date(detail.expires).getTime() : null,
-            url: 'https://www.smn.gob.ar/alertas'
+            url: 'https://www.smn.gob.ar/alertas',
+            ...window
           };
         })
       );
@@ -882,7 +983,8 @@ async function checkArgentinaSMN(locations, seenIds) {
     
     if (alerts.length > 0) {
       console.log(`Weather Clock: SMN ${alerts.length}/${alertLinks.length} alerts match user locations:`,
-        alerts.map(a => `${a.severity} ${a.eventType} for ${a.locationName}`));
+        alerts.map(a => `${a.severity} ${a.eventType} for ${a.locationName}` +
+          (a.isUpcoming ? ` (starts in ${a.startsInMinutes}min)` : ' (in effect)')));
     }
     
   } catch (err) {
@@ -923,24 +1025,43 @@ async function checkMeteoAlarm(locations, seenIds) {
         return match ? match[1].trim() : null;
       };
       
-      const id = getTag('id');
-      const title = getTag('title');
-      const summary = getTag('summary');
-      const updated = getTag('updated');
-      
+      const id = getTag('id') || getTag('cap:identifier');
+      const title = getTag('title') || getTag('cap:event');
+      const summary = getTag('summary') || getTag('cap:areaDesc');
+      const updated = getTag('updated') || getTag('cap:sent');
+
       if (!id || seenIds.includes(id)) continue;
+
+      // MeteoAlarm entries carry the CAP fields inline under the cap: prefix
+      if (!isCapMessageLive({
+        status: getTag('cap:status'),
+        msgType: getTag('cap:message_type')
+      })) continue;
+
+      const window = getAlertWindow({
+        onset: getTag('cap:onset'),
+        effective: getTag('cap:effective'),
+        expires: getTag('cap:expires'),
+        sent: getTag('cap:sent') || updated
+      });
+      if (!window) continue;
+
       seenIds.push(id);
-      
-      // Parse severity from title or content
-      let severity = 'Moderate';
+
+      // Prefer the declared severity; fall back to reading the awareness colour
+      let severity = getTag('cap:severity');
       let eventType = 'weather';
-      
+
+      if (!severity && (title || summary)) {
+        const colour = (title + ' ' + (summary || '')).toLowerCase();
+        if (colour.includes('red') || colour.includes('extreme')) severity = 'Severe';
+        else if (colour.includes('orange')) severity = 'Moderate';
+        else if (colour.includes('yellow')) severity = 'Minor';
+        else severity = 'Moderate';
+      }
+
       if (title || summary) {
         const content = (title + ' ' + (summary || '')).toLowerCase();
-        if (content.includes('red') || content.includes('extreme')) severity = 'Severe';
-        else if (content.includes('orange') || content.includes('severe')) severity = 'Moderate';
-        else if (content.includes('yellow') || content.includes('moderate')) severity = 'Minor';
-        
         if (content.includes('wind') || content.includes('viento')) eventType = 'wind';
         else if (content.includes('rain') || content.includes('lluvia')) eventType = 'rain';
         else if (content.includes('snow') || content.includes('nieve')) eventType = 'snow';
@@ -950,10 +1071,7 @@ async function checkMeteoAlarm(locations, seenIds) {
         else if (content.includes('flood')) eventType = 'flood';
         else if (content.includes('fog')) eventType = 'fog';
       }
-      
-      const time = updated ? new Date(updated).getTime() : Date.now();
-      const minutesAgo = (Date.now() - time) / 60000;
-      
+
       for (const location of euLocations) {
         const { alertLevel, relevance } = mapWeatherSeverity(severity);
 
@@ -964,15 +1082,14 @@ async function checkMeteoAlarm(locations, seenIds) {
             alertLevel,
             severity,
             eventType,
-            minutesAgo: Math.round(minutesAgo),
             relevance,
             place: title || 'Europe',
             headline: title,
             description: summary,
-            time,
             locationName: location.name,
             source: 'MeteoAlarm',
-            url: 'https://www.meteoalarm.org'
+            url: 'https://www.meteoalarm.org',
+            ...window
           });
           break;
         }
@@ -1020,28 +1137,57 @@ async function checkBrazilINMET(locations, seenIds) {
       const title = getTag('title');
       const description = getTag('description');
       const pubDate = getTag('pubDate');
-      
+
       if (!guid || seenIds.includes(guid)) continue;
+
+      // INMET publishes the window inside the description table as
+      // "Início" / "Fim" rows, with naive timestamps. pubDate repeats Início
+      // with an explicit offset, so we parse both against that same offset to
+      // stay consistent with the feed.
+      const fieldFromTable = (label) => {
+        const match = (description || '').match(
+          new RegExp(`>\\s*${label}\\s*</th>\\s*<td>([^<]*)</td>`, 'i')
+        );
+        return match ? match[1].trim() : null;
+      };
+      const offsetMatch = (pubDate || '').match(/([+-])(\d{2}):?(\d{2})\s*$/);
+      const offset = offsetMatch
+        ? `${offsetMatch[1]}${offsetMatch[2]}:${offsetMatch[3]}`
+        : 'Z';
+      const toIso = (naive) => {
+        if (!naive) return null;
+        const match = naive.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/);
+        return match ? `${match[1]}T${match[2]}${offset}` : null;
+      };
+
+      const window = getAlertWindow({
+        onset: toIso(fieldFromTable('Início')) || pubDate,
+        expires: toIso(fieldFromTable('Fim')),
+        sent: pubDate
+      });
+      if (!window) continue;
+
       seenIds.push(guid);
-      
+
+      // INMET grades severity as Perigo Potencial (yellow) < Perigo (orange)
+      // < Grande Perigo (red). Check the longest label first so "Perigo
+      // Potencial" is not read as the more serious plain "Perigo".
       let severity = 'Moderate';
       let eventType = 'weather';
-      
+      const grade = `${title || ''} ${fieldFromTable('Severidade') || ''}`.toLowerCase();
+
+      if (grade.includes('grande perigo') || grade.includes('vermelho')) severity = 'Severe';
+      else if (grade.includes('perigo potencial') || grade.includes('amarelo')) severity = 'Minor';
+      else if (grade.includes('perigo') || grade.includes('laranja')) severity = 'Moderate';
+
       if (title) {
         const lowerTitle = title.toLowerCase();
-        if (lowerTitle.includes('vermelho') || lowerTitle.includes('perigo')) severity = 'Severe';
-        else if (lowerTitle.includes('laranja')) severity = 'Moderate';
-        else if (lowerTitle.includes('amarelo')) severity = 'Minor';
-        
         if (lowerTitle.includes('chuva') || lowerTitle.includes('precipitação')) eventType = 'rain';
         else if (lowerTitle.includes('tempestade')) eventType = 'thunderstorm';
         else if (lowerTitle.includes('vento')) eventType = 'wind';
         else if (lowerTitle.includes('onda de calor')) eventType = 'heat';
       }
-      
-      const time = pubDate ? new Date(pubDate).getTime() : Date.now();
-      const minutesAgo = (Date.now() - time) / 60000;
-      
+
       for (const location of brLocations) {
         const { alertLevel, relevance } = mapWeatherSeverity(severity);
 
@@ -1052,15 +1198,14 @@ async function checkBrazilINMET(locations, seenIds) {
             alertLevel,
             severity,
             eventType,
-            minutesAgo: Math.round(minutesAgo),
             relevance,
             place: title || 'Brasil',
             headline: title,
             description,
-            time,
             locationName: location.name,
             source: 'INMET Brasil',
-            url: 'https://alertas2.inmet.gov.br'
+            url: 'https://alertas2.inmet.gov.br',
+            ...window
           });
           break;
         }
@@ -1104,53 +1249,56 @@ async function checkChileMeteo(locations, seenIds) {
         return match ? match[1].trim().replace(/<!\[CDATA\[|\]\]>/g, '') : null;
       };
       
-      const guid = getTag('guid') || getTag('link');
+      const link = getTag('link');
+      const guid = getTag('guid') || link;
       const title = getTag('title');
       const description = getTag('description');
-      const pubDate = getTag('pubDate');
-      
+
       if (!guid || seenIds.includes(guid)) continue;
-      seenIds.push(guid);
-      
-      let severity = 'Moderate';
+      if (!link) continue;
+
+      // Each RSS item links to a CAP document holding the real severity and
+      // validity window - the item title only says "Aviso"/"Alerta"
+      const doc = await fetchCapDocument(link);
+      if (!doc || !isCapMessageLive(doc)) continue;
+
       let eventType = 'weather';
-      
       if (title) {
         const lowerTitle = title.toLowerCase();
-        if (lowerTitle.includes('roja') || lowerTitle.includes('extrema')) severity = 'Severe';
-        else if (lowerTitle.includes('naranja') || lowerTitle.includes('alerta')) severity = 'Moderate';
-        else if (lowerTitle.includes('amarilla') || lowerTitle.includes('aviso')) severity = 'Minor';
-        
         if (lowerTitle.includes('lluvia') || lowerTitle.includes('precipitaciones')) eventType = 'rain';
         else if (lowerTitle.includes('viento')) eventType = 'wind';
         else if (lowerTitle.includes('nieve')) eventType = 'snow';
         else if (lowerTitle.includes('tormenta')) eventType = 'thunderstorm';
         else if (lowerTitle.includes('marejada')) eventType = 'coastal';
-        else if (lowerTitle.includes('frío')) eventType = 'cold';
+        else if (lowerTitle.includes('frío') || lowerTitle.includes('helada')) eventType = 'cold';
       }
-      
-      const time = pubDate ? new Date(pubDate).getTime() : Date.now();
-      const minutesAgo = (Date.now() - time) / 60000;
-      
+
       for (const location of clLocations) {
+        const info = findCapInfoForLocation(doc, location);
+        if (!info) continue;
+
+        const window = getAlertWindow(info);
+        if (!window) continue;
+
+        const severity = info.severity || 'Moderate';
         const { alertLevel, relevance } = mapWeatherSeverity(severity);
 
         if (alertLevel !== 'info') {
+          seenIds.push(guid);
           alerts.push({
             id: guid,
             type: 'severe_weather',
             alertLevel,
             severity,
             eventType,
-            minutesAgo: Math.round(minutesAgo),
             relevance,
-            place: title || 'Chile',
-            headline: title,
-            description,
-            time,
+            place: info.areaDesc || title || 'Chile',
+            headline: info.headline || title,
+            description: info.description || description,
             locationName: location.name,
             source: 'MeteoChile',
-            url: 'https://www.meteochile.gob.cl/alertas'
+            url: 'https://www.meteochile.gob.cl/alertas',
+            ...window
           });
           break;
         }
@@ -1198,19 +1346,41 @@ async function checkCanadaNAAD(locations, seenIds) {
       const title = getTag('title');
       const summary = getTag('summary');
       const updated = getTag('updated');
-      
+
       if (!id || seenIds.includes(id)) continue;
+
+      // NAAD mirrors the CAP fields as <category term="key=value"/> pairs
+      const categories = {};
+      for (const [, term] of itemXml.matchAll(/<category term="([^"]+)"\s*\/?>/g)) {
+        const separator = term.indexOf('=');
+        if (separator > 0) categories[term.slice(0, separator)] = term.slice(separator + 1);
+      }
+
+      if (!isCapMessageLive({ status: categories.status, msgType: categories.msgType })) continue;
+
+      // Entries whose event has finished are still published, titled
+      // "... ended" / "... terminée"; they are not live alerts
+      const lowerTitle = (title || '').toLowerCase();
+      if (/\b(ended|terminée|terminé)\s*$/.test(lowerTitle)) continue;
+
+      // The expiry time lives in the summary HTML, not in a dedicated element
+      const expiresMatch = (summary || '').match(/Expires:\s*([0-9T:+\-.]+)/);
+      const window = getAlertWindow({
+        expires: expiresMatch ? expiresMatch[1] : null,
+        sent: updated
+      });
+      if (!window) continue;
+
       seenIds.push(id);
-      
-      let severity = 'Moderate';
+
+      // Prefer the severity the issuer declared over guessing from wording
+      let severity = categories.severity && categories.severity !== 'Unknown'
+        ? categories.severity
+        : 'Moderate';
       let eventType = 'weather';
-      
+
       if (title || summary) {
         const content = (title + ' ' + (summary || '')).toLowerCase();
-        if (content.includes('warning') || content.includes('avertissement')) severity = 'Severe';
-        else if (content.includes('watch') || content.includes('veille')) severity = 'Moderate';
-        else if (content.includes('advisory') || content.includes('bulletin')) severity = 'Minor';
-        
         if (content.includes('tornado') || content.includes('tornade')) eventType = 'tornado';
         else if (content.includes('thunderstorm') || content.includes('orage')) eventType = 'thunderstorm';
         else if (content.includes('wind') || content.includes('vent')) eventType = 'wind';
@@ -1221,10 +1391,7 @@ async function checkCanadaNAAD(locations, seenIds) {
         else if (content.includes('heat') || content.includes('chaleur')) eventType = 'heat';
         else if (content.includes('flood') || content.includes('inondation')) eventType = 'flood';
       }
-      
-      const time = updated ? new Date(updated).getTime() : Date.now();
-      const minutesAgo = (Date.now() - time) / 60000;
-      
+
       for (const location of caLocations) {
         let { alertLevel, relevance } = mapWeatherSeverity(severity);
         // Tornado warnings elevate one step
@@ -1239,15 +1406,14 @@ async function checkCanadaNAAD(locations, seenIds) {
             alertLevel,
             severity,
             eventType,
-            minutesAgo: Math.round(minutesAgo),
             relevance,
             place: title || 'Canada',
             headline: title,
             description: summary,
-            time,
             locationName: location.name,
             source: 'NAAD Canada',
-            url: 'https://weather.gc.ca/warnings/index_e.html'
+            url: 'https://weather.gc.ca/warnings/index_e.html',
+            ...window
           });
           break;
         }
@@ -1428,11 +1594,14 @@ async function checkAllDisasters() {
     const now = Date.now();
     const sixHoursAgo = now - 6 * 60 * 60 * 1000;
     const oneDayAgo = now - 24 * 60 * 60 * 1000;
-    
-    // Combine old and new alerts, removing duplicates by ID
-    // Filter by age: 6h for weather alerts, 24h for earthquakes
+
+    // Combine old and new alerts, removing duplicates by ID.
+    // An alert with a validity window is kept for exactly as long as that
+    // window is open, however long ago it was issued. Only alerts without one
+    // (earthquakes, hurricanes) fall back to an age cutoff.
     const combinedAlerts = [
       ...activeAlerts.filter(a => {
+        if (a.endTime) return a.endTime > now;
         if (a.type === 'earthquake') return a.time > oneDayAgo;
         return a.time > sixHoursAgo;
       }),
@@ -1454,10 +1623,14 @@ async function checkAllDisasters() {
       [STORAGE_KEY_ALERTS]: activeAlerts
     });
     
-    // Update badge - only show recent alerts (3h)
-    const recentAlerts = activeAlerts.filter(a =>
-      Date.now() - a.time < 3 * 60 * 60 * 1000
-    );
+    // Update badge - count what is happening now: alerts still inside their
+    // validity window, or recently issued (3h) when they have none. Alerts
+    // that have not started yet are excluded so the badge never overstates.
+    const recentAlerts = activeAlerts.filter(a => {
+      if (a.isUpcoming) return false;
+      if (a.endTime) return a.endTime > now;
+      return now - a.time < 3 * 60 * 60 * 1000;
+    });
     await updateBadge(recentAlerts);
     
     if (newAlerts.length > 0) {
@@ -1515,7 +1688,10 @@ async function sendNotification(alert) {
     message = `${alert.locationName || ''}`;
   }
   
-  if (alert.minutesAgo !== undefined && alert.minutesAgo < 120) {
+  // An alert that has not started yet must read as upcoming, never as "X ago"
+  if (alert.isUpcoming) {
+    message += ` • starts in ${formatLeadTime(alert.startsInMinutes)}`;
+  } else if (alert.minutesAgo !== undefined && alert.minutesAgo < 120) {
     message += ` • ${formatTimeAgo(alert.minutesAgo)}`;
   }
   
