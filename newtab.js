@@ -1814,6 +1814,13 @@ document.addEventListener('click', (e) => {
         // Load alerts when showing alerts face
         loadAlerts();
       }
+
+      // Move the active marker. Every cube face carries its own copy of the
+      // tab row, so all of them must be updated - not just the row clicked,
+      // which rotates out of view.
+      cube.querySelectorAll('.cube-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.face === face);
+      });
     }
   }
   
