@@ -2,6 +2,18 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.6.1] - 2026-07-31
+
+### Fixed
+- Earthquake alerts fired for events on the other side of the world. `mapLocalMMI` raised any magnitude 7+ earthquake to a moderate alert with no distance check at all, so a quake anywhere on Earth alerted every saved city. Measured against 30 days of USGS data for a user with Pehuajó (Argentina) and Auckland (New Zealand): exactly one alert would have fired all month — a M7.3 in Mexico, 6488 km away, with a local intensity of MMI 1.0, which the extension's own scale labels "Not felt". No alert came from shaking that could actually be felt. Alert level is now decided by the shaking that reaches the location; the tsunami flag still elevates distant events, since a tsunami does travel.
+- An earthquake was only ever reported for one saved city. Both earthquake sources stopped at the first location that produced a non-info level, and because the magnitude-7 rule made every location qualify regardless of distance, that was always simply the first city in the list. A M7.5 directly beneath Auckland was reported as a Pehuajó alert — 10044 km away, marked "not felt" — while Auckland, the city being shaken, received nothing. Each location is now evaluated on the shaking it actually receives, and alerts are keyed per location like every other source.
+
+### Changed
+- The local intensity calculation, previously duplicated between the USGS and GeoNet checks, is now a shared `calculateLocalMMI` helper.
+
+### Known issues
+- The USGS tsunami flag elevates an earthquake for every saved location regardless of whether it is coastal, so a distant tsunami-flagged quake can raise an alert for an inland city. Resolving this needs coastline data the extension does not currently carry.
+
 ## [1.6.0] - 2026-07-31
 
 Completes the work started in 1.4.0: that release fixed *when* an alert is shown, this one fixes *where*. Every source is now matched against the user's actual location.

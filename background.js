@@ -227,16 +227,37 @@ function mapWeatherSeverity(severity) {
   return { alertLevel: 'info', relevance: 10 };
 }
 
-// Map calculated local MMI (at user's location) to alert level.
+// Map calculated local MMI (at the user's location) to alert level.
 // MMI 6+ Strong (damage possible), 5 Moderate (felt by all),
 // 4 Light (felt by many), <4 Not felt / barely felt.
-// M7+ earthquakes always show as moderate minimum (major events).
-function mapLocalMMI(localMMI, magnitude) {
+//
+// Magnitude alone must not raise the level: a large earthquake on the far
+// side of the world shakes nothing here. What reaches the user is decided by
+// the shaking that reaches the user. Distant events can still matter through
+// their tsunami flag, which the callers elevate separately.
+function mapLocalMMI(localMMI) {
   if (localMMI >= 6) return { alertLevel: 'critical', relevance: 90 };
   if (localMMI >= 5) return { alertLevel: 'high', relevance: 60 };
   if (localMMI >= 4) return { alertLevel: 'moderate', relevance: 30 };
-  if (magnitude >= 7) return { alertLevel: 'moderate', relevance: 25 };
   return { alertLevel: 'info', relevance: 5 };
+}
+
+// Shaking expected at a location, as Modified Mercalli Intensity. Uses the
+// hypocentral distance (surface distance combined with depth), since a deep
+// earthquake directly underfoot shakes less than a shallow one at the same
+// map distance.
+function calculateLocalMMI(location, eventLat, eventLon, depth, magnitude) {
+  const surfaceDist = calculateDistance(location.lat, location.lon, eventLat, eventLon);
+  const hypocentralDist = Math.sqrt(surfaceDist * surfaceDist + (depth || 10) ** 2);
+
+  const mmi = hypocentralDist < 1
+    ? Math.min(12, 5.07 + 1.09 * magnitude)
+    : 5.07 + 1.09 * magnitude - 3.69 * Math.log10(hypocentralDist);
+
+  return {
+    distanceKm: surfaceDist,
+    localMMI: Math.max(1, Math.min(12, mmi))
+  };
 }
 
 // ============================================
@@ -370,42 +391,38 @@ async function checkEarthquakes(locations, seenIds) {
       const tsunami = props.tsunami || 0;
       const time = props.time;
       
-      // Check relevance for each location
+      // Every location is evaluated on its own: one earthquake can be
+      // destructive in one saved city and imperceptible in another, so
+      // stopping at the first match would report it against the wrong city
+      // and hide it from the one actually shaken.
       for (const location of locations) {
-        const distanceKm = calculateDistance(location.lat, location.lon, lat, lon);
+        const { distanceKm, localMMI } = calculateLocalMMI(location, lat, lon, depth, magnitude);
         const minutesAgo = (Date.now() - time) / 60000;
 
-        // Calculate local MMI at user's location
-        const hypocentralDist = Math.sqrt(distanceKm * distanceKm + (depth || 10) ** 2);
-        let localMMI = hypocentralDist < 1 ?
-          Math.min(12, 5.07 + 1.09 * magnitude) :
-          5.07 + 1.09 * magnitude - 3.69 * Math.log10(hypocentralDist);
-        localMMI = Math.max(1, Math.min(12, localMMI));
-
-        let { alertLevel, relevance } = mapLocalMMI(localMMI, magnitude);
+        let { alertLevel, relevance } = mapLocalMMI(localMMI);
+        // A distant quake can still threaten a coast through its tsunami
         if (tsunami === 1) ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
 
-        if (alertLevel !== 'info') {
-          alerts.push({
-            id: eq.id,
-            type: 'earthquake',
-            alertLevel,
-            magnitude,
-            depth: depth || 0,
-            localMMI: Math.round(localMMI * 10) / 10,
-            distanceKm: Math.round(distanceKm),
-            minutesAgo: Math.round(minutesAgo),
-            relevance,
-            place: props.place,
-            time,
-            tsunami: tsunami === 1,
-            url: props.url,
-            locationName: location.name,
-            eventLat: lat,
-            eventLon: lon
-          });
-          break; // Only one alert per earthquake (use highest relevance location)
-        }
+        if (alertLevel === 'info') continue;
+
+        alerts.push({
+          id: `${eq.id}-${location.name}`,
+          type: 'earthquake',
+          alertLevel,
+          magnitude,
+          depth: depth || 0,
+          localMMI: Math.round(localMMI * 10) / 10,
+          distanceKm: Math.round(distanceKm),
+          minutesAgo: Math.round(minutesAgo),
+          relevance,
+          place: props.place,
+          time,
+          tsunami: tsunami === 1,
+          url: props.url,
+          locationName: location.name,
+          eventLat: lat,
+          eventLon: lon
+        });
       }
     }
   } catch (err) {
@@ -567,40 +584,33 @@ async function checkGeoNet(locations, seenIds) {
       const mmi = props.mmi; // Modified Mercalli Intensity
       const time = new Date(props.time).getTime();
       
+      // As with the USGS feed, each location is judged on the shaking it
+      // actually receives rather than stopping at the first match
       for (const location of nzLocations) {
-        const distanceKm = calculateDistance(location.lat, location.lon, lat, lon);
+        const { distanceKm, localMMI } = calculateLocalMMI(location, lat, lon, depth, magnitude);
         const minutesAgo = (Date.now() - time) / 60000;
 
-        // Calculate local MMI at user's location (not epicentral MMI)
-        const hypocentralDist = Math.sqrt(distanceKm * distanceKm + (depth || 10) ** 2);
-        let localMMI = hypocentralDist < 1 ?
-          Math.min(12, 5.07 + 1.09 * magnitude) :
-          5.07 + 1.09 * magnitude - 3.69 * Math.log10(hypocentralDist);
-        localMMI = Math.max(1, Math.min(12, localMMI));
+        const { alertLevel, relevance } = mapLocalMMI(localMMI);
+        if (alertLevel === 'info') continue;
 
-        const { alertLevel, relevance } = mapLocalMMI(localMMI, magnitude);
-
-        if (alertLevel !== 'info') {
-          alerts.push({
-            id,
-            type: 'earthquake',
-            alertLevel,
-            magnitude,
-            depth: depth || 0,
-            localMMI: Math.round(localMMI * 10) / 10,
-            distanceKm: Math.round(distanceKm),
-            minutesAgo: Math.round(minutesAgo),
-            relevance,
-            place: props.locality || `${Math.round(distanceKm)}km from ${location.name}`,
-            time,
-            locationName: location.name,
-            eventLat: lat,
-            eventLon: lon,
-            source: 'GeoNet',
-            url: `https://www.geonet.org.nz/earthquake/${id}`
-          });
-          break;
-        }
+        alerts.push({
+          id: `${id}-${location.name}`,
+          type: 'earthquake',
+          alertLevel,
+          magnitude,
+          depth: depth || 0,
+          localMMI: Math.round(localMMI * 10) / 10,
+          distanceKm: Math.round(distanceKm),
+          minutesAgo: Math.round(minutesAgo),
+          relevance,
+          place: props.locality || `${Math.round(distanceKm)}km from ${location.name}`,
+          time,
+          locationName: location.name,
+          eventLat: lat,
+          eventLon: lon,
+          source: 'GeoNet',
+          url: `https://www.geonet.org.nz/earthquake/${id}`
+        });
       }
     }
   } catch (err) {

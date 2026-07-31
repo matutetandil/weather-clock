@@ -37,7 +37,11 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 - City search with autocomplete
 
 ### ⚠️ Disaster Alerts
-- Global earthquake monitoring (USGS)
+- Global earthquake monitoring (USGS + GeoNet for New Zealand). Alerts are
+  based on the shaking expected at *your* location, not on the magnitude at
+  the epicentre: a large earthquake far away shakes nothing here and is not
+  reported as your alert. Tsunami-flagged events still elevate, since a
+  tsunami travels.
 - Regional severe weather alerts:
   - 🇺🇸 USA (NWS)
   - 🇨🇦 Canada (NAAD)
