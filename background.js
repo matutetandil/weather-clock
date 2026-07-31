@@ -294,6 +294,19 @@ async function calculateCoastDistance(lat, lon) {
 // Could a tsunami plausibly reach this location? Falls back to treating the
 // location as exposed if the coastline failed to load, so a data problem
 // cannot silently suppress a genuine tsunami alert.
+//
+// This measures distance to the sea, not which sea: a Pacific earthquake
+// still elevates for an Atlantic coastal city. That is deliberate. The
+// obvious refinement - checking whether the great-circle path from the
+// epicentre to the city crosses land - was prototyped and rejected: it
+// reports a Kyushu earthquake as unable to reach Tokyo, because the straight
+// line crosses Japan. Tsunamis diffract around coastlines, so the test fails
+// exactly for near-field events, the ones with the least warning time.
+//
+// Getting this right needs real travel-time modelling over bathymetry, which
+// is what NOAA's tsunami warning centres publish. Until those products are
+// integrated, over-warning a coastal city on the wrong ocean is the correct
+// way to be wrong.
 async function isTsunamiExposed(location) {
   const points = await loadCoastline();
   if (points.length === 0) return true;

@@ -15,7 +15,7 @@ All notable changes to the Weather Clock extension will be documented in this fi
 - If the coastline fails to load, locations are treated as exposed, so a data problem cannot silently suppress a genuine tsunami alert.
 
 ### Known issues
-- Exposure is based on distance to the sea, not on which ocean. A tsunami-flagged Pacific earthquake will still elevate for an Atlantic coastal city. Resolving that properly needs tsunami travel-time modelling.
+- Exposure is based on distance to the sea, not on which ocean, so a tsunami-flagged Pacific earthquake still elevates for an Atlantic coastal city. This is left deliberately unfixed. Testing whether the great-circle path from the epicentre to the city crosses land was prototyped and rejected: it reports a Kyushu earthquake as unable to reach Tokyo, since the straight line crosses Japan — tsunamis diffract around coastlines, so the test fails precisely for near-field events, which carry the least warning time. Doing it properly needs travel-time modelling over bathymetry, which is what NOAA's tsunami warning centres publish; integrating those would mean adding `tsunami.gov` to the host permissions, which forces every user to re-approve the extension. Until then, over-warning a coastal city on the wrong ocean is the safer way to be wrong. (US locations are already covered correctly: NWS tsunami warnings arrive through `api.weather.gov` and are point-filtered.)
 
 ## [1.6.1] - 2026-07-31
 
