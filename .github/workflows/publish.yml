@@ -25,6 +25,8 @@ jobs:
         run: |
           unzip -l extension.zip | grep -q 'data/emma-regions.json' \
             || { echo "data/emma-regions.json missing from package - MeteoAlarm would silently return no alerts"; exit 1; }
+          unzip -l extension.zip | grep -q 'data/coastline.json' \
+            || { echo "data/coastline.json missing from package - inland cities would get tsunami alerts"; exit 1; }
 
       - name: Upload to Chrome Web Store
         run: |

@@ -2,6 +2,21 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.7.0] - 2026-07-31
+
+### Added
+- Tsunami alerts now require the location to actually be reachable by one. The USGS tsunami flag means an earthquake *can* generate a tsunami, not that any given city could be hit by it, so an inland town was being warned about a wave that cannot reach it. The extension bundles the ocean coastline (`data/coastline.json`, 0.42 MB) and elevates for tsunami only within 25 km of the sea. Pehuajó (334 km inland) and Toronto (on the Great Lakes, 400 km from any ocean) no longer receive tsunami alerts, while Auckland (3.6 km) and Mar del Plata (10 km) still do.
+- The tsunami flag stored on an alert now reflects whether *that location* is exposed, so the "⚠️ Tsunami Warning" line in the UI and in notifications no longer appears for inland cities.
+- `tools/build_coastline.py` regenerates the coastline and refuses to write a file that fails its built-in sanity checks against ten known coastal and inland cities.
+
+### Notes
+- Coastline data comes from [Natural Earth](https://www.naturalearthdata.com/) 1:50m, public domain, no attribution required. Its coastline layer covers oceans only — lakes are a separate layer and deliberately excluded, which is why cities on the Great Lakes are correctly treated as inland.
+- Simplified to every second vertex at 2 decimals, costing at most 0.5 km of accuracy against a 25 km threshold. The file is only read when a tsunami-flagged earthquake actually appears; lookups take about 4 ms per location and are then cached.
+- If the coastline fails to load, locations are treated as exposed, so a data problem cannot silently suppress a genuine tsunami alert.
+
+### Known issues
+- Exposure is based on distance to the sea, not on which ocean. A tsunami-flagged Pacific earthquake will still elevate for an Atlantic coastal city. Resolving that properly needs tsunami travel-time modelling.
+
 ## [1.6.1] - 2026-07-31
 
 ### Fixed

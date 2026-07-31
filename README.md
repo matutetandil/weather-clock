@@ -41,7 +41,8 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
   based on the shaking expected at *your* location, not on the magnitude at
   the epicentre: a large earthquake far away shakes nothing here and is not
   reported as your alert. Tsunami-flagged events still elevate, since a
-  tsunami travels.
+  tsunami travels — but only for cities within 25 km of an ocean, so inland
+  towns are not warned about a wave that cannot reach them.
 - Regional severe weather alerts:
   - 🇺🇸 USA (NWS)
   - 🇨🇦 Canada (NAAD)
@@ -137,7 +138,7 @@ git clone https://github.com/matutetandil/weather-clock.git
 ├── newtab.html        # Main UI
 ├── newtab.js          # Frontend logic
 ├── background.js      # Alert service worker
-├── data/              # Bundled EMMA region polygons for European alerts
+├── data/              # Bundled geometry: EMMA warning regions, ocean coastline
 ├── tools/             # Development scripts (not shipped in the extension)
 └── icons/             # Extension icons
 ```
@@ -157,14 +158,19 @@ Live feeds change constantly, so zero alerts for a city is usually normal —
 what matters are the `FAIL` lines. INMET rate-limits aggressively; re-run
 after a minute if it says so.
 
-### Regenerating the European region data
+### Regenerating the bundled data
 
 ```bash
-python3 tools/build_regions.py
+python3 tools/build_regions.py     # data/emma-regions.json
+python3 tools/build_coastline.py   # data/coastline.json
 ```
 
-Rebuilds `data/emma-regions.json`. Only needed when MeteoAlarm changes its
-regions, such as when a country renumbers its EMMA codes.
+`emma-regions.json` holds the MeteoAlarm warning regions, needed because
+MeteoAlarm publishes no geometry of its own — rebuild it when a country
+renumbers its EMMA codes. `coastline.json` holds the ocean coastline, used to
+decide whether a city is close enough to the sea for a tsunami to reach it;
+it rarely needs rebuilding, and the script refuses to write a file that fails
+its sanity checks.
 
 ## Contributing
 

@@ -242,6 +242,64 @@ function mapLocalMMI(localMMI) {
   return { alertLevel: 'info', relevance: 5 };
 }
 
+// ============================================
+// TSUNAMI EXPOSURE
+// ============================================
+// The USGS tsunami flag says an earthquake can generate a tsunami, not that
+// any given city could be reached by one. An inland town is not at risk
+// however large the earthquake was, so a location only counts as exposed
+// when it sits close to an ocean coast. data/coastline.json holds the
+// coastline vertices; lakes are excluded, so cities on the Great Lakes are
+// correctly treated as inland.
+const COASTAL_THRESHOLD_KM = 25;
+
+let coastlineCache = null;
+const coastDistanceCache = new Map();
+
+async function loadCoastline() {
+  if (coastlineCache) return coastlineCache;
+  try {
+    const response = await fetch(chrome.runtime.getURL('data/coastline.json'));
+    const data = await response.json();
+    coastlineCache = data.points || [];
+    console.log(`Weather Clock: loaded ${coastlineCache.length} coastline points`);
+  } catch (err) {
+    console.error('Weather Clock: could not load coastline:', err);
+    coastlineCache = [];
+  }
+  return coastlineCache;
+}
+
+// Distance from a location to the nearest ocean, in km. Infinity when no
+// coast is anywhere near. Cached per location - coastlines do not move.
+async function calculateCoastDistance(lat, lon) {
+  const key = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+  if (coastDistanceCache.has(key)) return coastDistanceCache.get(key);
+
+  const points = await loadCoastline();
+  let nearest = Infinity;
+
+  for (const [coastLon, coastLat] of points) {
+    // Reject distant points before doing the expensive trigonometry. A degree
+    // of latitude is ~111 km, so 8 degrees comfortably exceeds the threshold.
+    if (Math.abs(coastLat - lat) > 8 || Math.abs(coastLon - lon) > 10) continue;
+    const distance = calculateDistance(lat, lon, coastLat, coastLon);
+    if (distance < nearest) nearest = distance;
+  }
+
+  coastDistanceCache.set(key, nearest);
+  return nearest;
+}
+
+// Could a tsunami plausibly reach this location? Falls back to treating the
+// location as exposed if the coastline failed to load, so a data problem
+// cannot silently suppress a genuine tsunami alert.
+async function isTsunamiExposed(location) {
+  const points = await loadCoastline();
+  if (points.length === 0) return true;
+  return (await calculateCoastDistance(location.lat, location.lon)) <= COASTAL_THRESHOLD_KM;
+}
+
 // Shaking expected at a location, as Modified Mercalli Intensity. Uses the
 // hypocentral distance (surface distance combined with depth), since a deep
 // earthquake directly underfoot shakes less than a shallow one at the same
@@ -400,8 +458,11 @@ async function checkEarthquakes(locations, seenIds) {
         const minutesAgo = (Date.now() - time) / 60000;
 
         let { alertLevel, relevance } = mapLocalMMI(localMMI);
-        // A distant quake can still threaten a coast through its tsunami
-        if (tsunami === 1) ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
+
+        // A distant quake can still threaten a coast through its tsunami -
+        // but only a coast. Inland cities are not reachable by one.
+        const exposed = tsunami === 1 && await isTsunamiExposed(location);
+        if (exposed) ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
 
         if (alertLevel === 'info') continue;
 
@@ -417,7 +478,9 @@ async function checkEarthquakes(locations, seenIds) {
           relevance,
           place: props.place,
           time,
-          tsunami: tsunami === 1,
+          // Only flag the tsunami where one could actually arrive, so the UI
+          // and notifications do not warn an inland city about a wave
+          tsunami: exposed,
           url: props.url,
           locationName: location.name,
           eventLat: lat,
