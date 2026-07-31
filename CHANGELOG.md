@@ -2,6 +2,26 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.6.0] - 2026-07-31
+
+Completes the work started in 1.4.0: that release fixed *when* an alert is shown, this one fixes *where*. Every source is now matched against the user's actual location.
+
+### Fixed
+- Hurricane tracking had never worked. `checkHurricanes` fetched `APIS.hurricanesAtlantic`, which does not exist — the key is `hurricanes` — so every run threw on `fetch(undefined)` and was swallowed by the catch. Verified after the fix: a point 256 km from Tropical Storm Genevieve now receives a high alert, while Miami (4800 km away) receives none.
+- USA (NWS): alerts were shown to every US location regardless of distance. The code computed `distanceKm` and never used it to filter, so a Miami user saw warnings for Arizona, Montana and Rhode Island. Separately, alerts without polygon geometry were discarded entirely — 247 of 260 active alerts nationwide — so the source both showed the wrong alerts and dropped nearly all the right ones. Now queries `?point=lat,lon`, which resolves against both alert polygons and forecast zones.
+- Canada (NAAD): every Canadian alert was applied to every Canadian location, even though all 230 feed entries carry a `georss:polygon` that was simply ignored. Toronto was showing 38 alerts, none of which covered Toronto — 100% false positives, and the badge displayed "38".
+- Brazil (INMET): every Brazilian alert was applied to every Brazilian location. Migrated from the RSS feed to the `avisos/ativos` JSON API, which publishes the alert polygon, the severity grade and the validity window as real fields instead of an HTML table.
+- Canada (NAAD): air quality alerts were mislabelled as wind, because the summary text mentions wind before the event type was checked.
+- Brazil (INMET): a rate-limited response (plain text with a 200) crashed the check with a JSON parse error. It is now detected and logged.
+- USA (NWS): an alert covering two saved cities was only reported for the first, because the dedup key was the alert id alone. Alerts are now keyed per location, as the other sources already were.
+
+### Added
+- `tools/check-sources.mjs` — runs the real `background.js` against the live feeds outside Chrome and asserts no alert is returned past its `expires` or attributed to a location outside its area. It found the dead hurricane source on its first run.
+- `tools/build_regions.py` — regenerates `data/emma-regions.json`, so the European region data is reproducible when MeteoAlarm renumbers its regions.
+
+### Removed
+- `METEOALARM_COUNTRIES`, an unused constant that also had the wrong slug for North Macedonia (`north-macedonia` rather than `republic-of-north-macedonia`), left over from before per-country feeds were wired up.
+
 ## [1.5.0] - 2026-07-30
 
 ### Fixed

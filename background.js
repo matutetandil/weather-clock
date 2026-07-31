@@ -28,7 +28,9 @@ const APIS = {
   argentinaSMN: 'https://ssl.smn.gob.ar/CAP/AR.php',
   
   // BRAZIL - INMET
-  brazilINMET: 'https://apiprevmet3.inmet.gov.br/avisos/rss',
+  // JSON API rather than the RSS feed: it carries the alert polygons, which
+  // the RSS omits, plus the severity grade and the validity window
+  brazilINMET: 'https://apiprevmet3.inmet.gov.br/avisos/ativos',
   
   // CHILE - Meteochile
   chileMeteo: 'https://archivos.meteochile.gob.cl/portaldmc/rss/rss.php',
@@ -58,18 +60,6 @@ const REGIONS = {
   BRAZIL: { bounds: [-34, 6, -74, -34], name: 'Brazil' },
   CHILE: { bounds: [-56, -17, -76, -66], name: 'Chile' },
   SOUTH_AMERICA: { bounds: [-56, 13, -82, -34], name: 'South America' },
-};
-
-// European countries for MeteoAlarm
-const METEOALARM_COUNTRIES = {
-  AT: 'austria', BE: 'belgium', BA: 'bosnia-herzegovina', BG: 'bulgaria',
-  HR: 'croatia', CY: 'cyprus', CZ: 'czechia', DK: 'denmark', EE: 'estonia',
-  FI: 'finland', FR: 'france', DE: 'germany', GR: 'greece', HU: 'hungary',
-  IS: 'iceland', IE: 'ireland', IT: 'italy', LV: 'latvia', LT: 'lithuania',
-  LU: 'luxembourg', MT: 'malta', MD: 'moldova', ME: 'montenegro', NL: 'netherlands',
-  MK: 'north-macedonia', NO: 'norway', PL: 'poland', PT: 'portugal', RO: 'romania',
-  RS: 'serbia', SK: 'slovakia', SI: 'slovenia', ES: 'spain', SE: 'sweden',
-  CH: 'switzerland', GB: 'united-kingdom', UK: 'united-kingdom'
 };
 
 function getRegions(lat, lon) {
@@ -429,127 +419,116 @@ async function checkEarthquakes(locations, seenIds) {
 // NWS ALERTS (Tsunamis, Severe Weather - USA)
 // api.weather.gov has CORS enabled
 // ============================================
+// NWS publishes many low-urgency products; only these reach the user
+const NWS_PRIORITY_EVENTS = [
+  'Tsunami Warning', 'Tsunami Watch', 'Tsunami Advisory',
+  'Earthquake Warning', 'Volcano Warning',
+  'Tornado Warning', 'Tornado Watch',
+  'Hurricane Warning', 'Hurricane Watch',
+  'Typhoon Warning', 'Typhoon Watch',
+  'Tropical Storm Warning', 'Tropical Storm Watch',
+  'Extreme Wind Warning', 'Storm Surge Warning',
+  'Flash Flood Emergency', 'Flash Flood Warning'
+];
+
 async function checkNWSAlerts(locations, seenIds) {
   const alerts = [];
-  
+
   // Only check if any location is in USA
   const usaLocations = locations.filter(loc => isInUSA(loc.lat, loc.lon));
   if (usaLocations.length === 0) return alerts;
   
-  try {
-    const response = await fetch(APIS.nwsAlerts, {
-      headers: {
-        'User-Agent': 'WeatherClockExtension/1.0 (github.com/weather-clock)',
-        'Accept': 'application/geo+json'
-      }
-    });
-    
-    if (!response.ok) {
-      console.log('Weather Clock: NWS API returned', response.status);
-      return alerts;
+  // Query the API per location. NWS resolves the point against both alert
+  // polygons and forecast zones, so this returns exactly the alerts affecting
+  // the user - including the zone-based ones (the large majority) that carry
+  // no polygon of their own and cannot be matched locally.
+  for (const location of usaLocations) {
+    try {
+      await checkNWSForLocation(location, seenIds, alerts);
+    } catch (err) {
+      console.error(`Weather Clock: NWS check error for ${location.name}:`, err);
     }
-    
-    const data = await response.json();
-    const features = data.features || [];
-    
-    // Filter for high-priority events
-    const priorityEvents = [
-      'Tsunami Warning', 'Tsunami Watch', 'Tsunami Advisory',
-      'Earthquake Warning', 'Volcano Warning',
-      'Tornado Warning', 'Tornado Watch',
-      'Hurricane Warning', 'Hurricane Watch',
-      'Typhoon Warning', 'Typhoon Watch',
-      'Tropical Storm Warning', 'Tropical Storm Watch',
-      'Extreme Wind Warning', 'Storm Surge Warning',
-      'Flash Flood Emergency', 'Flash Flood Warning'
-    ];
-    
-    for (const feature of features) {
-      const props = feature.properties;
-      const eventType = props.event || '';
-      
-      // Skip if not a priority event
-      if (!priorityEvents.some(pe => eventType.includes(pe.split(' ')[0]))) continue;
-      
-      const id = props.id || `nws-${props.event}-${props.onset}`;
-      if (seenIds.includes(id)) continue;
-
-      // Skip cancellations and test messages
-      if (!isCapMessageLive({ status: props.status, msgType: props.messageType })) continue;
-
-      // Skip alerts outside their validity window. NWS uses `ends` for the
-      // event window and `expires` for the message itself; prefer `ends`.
-      const window = getAlertWindow({
-        onset: props.onset,
-        effective: props.effective,
-        expires: props.ends || props.expires,
-        sent: props.sent
-      });
-      if (!window) continue;
-
-      seenIds.push(id);
-
-      // Get alert geometry center or use affected zones
-      let alertLat = null, alertLon = null;
-      
-      if (feature.geometry && feature.geometry.type === 'Polygon') {
-        // Calculate centroid of polygon
-        const coords = feature.geometry.coordinates[0];
-        const sumLat = coords.reduce((sum, c) => sum + c[1], 0);
-        const sumLon = coords.reduce((sum, c) => sum + c[0], 0);
-        alertLat = sumLat / coords.length;
-        alertLon = sumLon / coords.length;
-      }
-      
-      if (!alertLat || !alertLon) continue;
-      
-      const severity = props.severity; // Extreme, Severe, Moderate, Minor
-      const certainty = props.certainty; // Observed, Likely, Possible
-      
-      // Determine alert type
-      let type = 'severe_weather';
-      if (eventType.toLowerCase().includes('tsunami')) type = 'tsunami';
-      else if (eventType.toLowerCase().includes('tornado')) type = 'tornado';
-      else if (eventType.toLowerCase().includes('hurricane') || eventType.toLowerCase().includes('typhoon')) type = 'hurricane';
-      else if (eventType.toLowerCase().includes('volcano')) type = 'volcano';
-      else if (eventType.toLowerCase().includes('earthquake')) type = 'earthquake';
-      
-      // Check relevance for USA locations
-      for (const location of usaLocations) {
-        const distanceKm = calculateDistance(location.lat, location.lon, alertLat, alertLon);
-
-        let { alertLevel, relevance } = mapWeatherSeverity(severity);
-        // Tsunami/tornado warnings elevate one step
-        if (type === 'tsunami' || type === 'tornado') {
-          ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
-        }
-
-        if (alertLevel !== 'info') {
-          alerts.push({
-            id,
-            type,
-            alertLevel,
-            distanceKm: Math.round(distanceKm),
-            relevance,
-            place: props.areaDesc || props.headline || eventType,
-            headline: props.headline,
-            severity,
-            locationName: location.name,
-            eventLat: alertLat,
-            eventLon: alertLon,
-            nwsEvent: eventType,
-            url: `https://alerts.weather.gov`,
-            ...window
-          });
-          break;
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Weather Clock: NWS alerts check error:', err);
   }
-  
+
   return alerts;
+}
+
+async function checkNWSForLocation(location, seenIds, alerts) {
+  const url = `${APIS.nwsAlerts}?point=${location.lat.toFixed(4)},${location.lon.toFixed(4)}`;
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'WeatherClockExtension/1.0 (github.com/weather-clock)',
+      'Accept': 'application/geo+json'
+    }
+  });
+
+  if (!response.ok) {
+    console.log('Weather Clock: NWS API returned', response.status, 'for', location.name);
+    return;
+  }
+
+  const data = await response.json();
+  const features = data.features || [];
+
+  for (const feature of features) {
+    const props = feature.properties;
+    const eventType = props.event || '';
+
+    // Skip if not a priority event
+    if (!NWS_PRIORITY_EVENTS.some(pe => eventType.includes(pe.split(' ')[0]))) continue;
+
+    // Keyed per location: the same alert can cover two saved cities, and each
+    // should surface (and notify) on its own
+    const id = props.id || `nws-${props.event}-${props.onset}`;
+    const alertKey = `${id}-${location.name}`;
+    if (seenIds.includes(alertKey)) continue;
+
+    // Skip cancellations and test messages
+    if (!isCapMessageLive({ status: props.status, msgType: props.messageType })) continue;
+
+    // Skip alerts outside their validity window. NWS uses `ends` for the
+    // event window and `expires` for the message itself; prefer `ends`.
+    const window = getAlertWindow({
+      onset: props.onset,
+      effective: props.effective,
+      expires: props.ends || props.expires,
+      sent: props.sent
+    });
+    if (!window) continue;
+
+    const severity = props.severity; // Extreme, Severe, Moderate, Minor
+
+    // Determine alert type
+    let type = 'severe_weather';
+    if (eventType.toLowerCase().includes('tsunami')) type = 'tsunami';
+    else if (eventType.toLowerCase().includes('tornado')) type = 'tornado';
+    else if (eventType.toLowerCase().includes('hurricane') || eventType.toLowerCase().includes('typhoon')) type = 'hurricane';
+    else if (eventType.toLowerCase().includes('volcano')) type = 'volcano';
+    else if (eventType.toLowerCase().includes('earthquake')) type = 'earthquake';
+
+    let { alertLevel, relevance } = mapWeatherSeverity(severity);
+    // Tsunami/tornado warnings elevate one step
+    if (type === 'tsunami' || type === 'tornado') {
+      ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
+    }
+    if (alertLevel === 'info') continue;
+
+    seenIds.push(alertKey);
+
+    alerts.push({
+      id: alertKey,
+      type,
+      alertLevel,
+      relevance,
+      place: props.areaDesc || props.headline || eventType,
+      headline: props.headline,
+      severity,
+      locationName: location.name,
+      nwsEvent: eventType,
+      url: `https://alerts.weather.gov`,
+      ...window
+    });
+  }
 }
 
 // ============================================
@@ -1243,113 +1222,120 @@ async function checkMeteoAlarmFeed(slug, targets, seenIds, alerts) {
 // ============================================
 async function checkBrazilINMET(locations, seenIds) {
   const alerts = [];
-  
+
   const brLocations = locations.filter(loc => isInBrazil(loc.lat, loc.lon));
   if (brLocations.length === 0) return alerts;
-  
+
   try {
-    const response = await fetch(APIS.brazilINMET, {
-      headers: { 'Accept': 'application/rss+xml, application/xml, text/xml' }
-    });
+    const response = await fetch(APIS.brazilINMET);
     if (!response.ok) {
       console.log('Weather Clock: Brazil INMET returned', response.status);
       return alerts;
     }
-    
-    const text = await response.text();
-    const itemRegex = /<item>([\s\S]*?)<\/item>/g;
-    const items = [...text.matchAll(itemRegex)];
-    
-    for (const itemMatch of items) {
-      const itemXml = itemMatch[1];
-      
-      const getTag = (tag) => {
-        const match = itemXml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
-        return match ? match[1].trim().replace(/<!\[CDATA\[|\]\]>/g, '') : null;
-      };
-      
-      const guid = getTag('guid');
-      const title = getTag('title');
-      const description = getTag('description');
-      const pubDate = getTag('pubDate');
 
-      if (!guid || seenIds.includes(guid)) continue;
+    // INMET answers rate limiting with a plain-text body and a 200, so parse
+    // defensively rather than letting a JSON error surface as a crash
+    const body = await response.text();
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      console.log('Weather Clock: Brazil INMET returned a non-JSON body:', body.slice(0, 120));
+      return alerts;
+    }
 
-      // INMET publishes the window inside the description table as
-      // "Início" / "Fim" rows, with naive timestamps. pubDate repeats Início
-      // with an explicit offset, so we parse both against that same offset to
-      // stay consistent with the feed.
-      const fieldFromTable = (label) => {
-        const match = (description || '').match(
-          new RegExp(`>\\s*${label}\\s*</th>\\s*<td>([^<]*)</td>`, 'i')
-        );
-        return match ? match[1].trim() : null;
-      };
-      const offsetMatch = (pubDate || '').match(/([+-])(\d{2}):?(\d{2})\s*$/);
-      const offset = offsetMatch
-        ? `${offsetMatch[1]}${offsetMatch[2]}:${offsetMatch[3]}`
-        : 'Z';
+    // The API splits alerts into those in effect today and those still to
+    // come; both are handled, and getAlertWindow decides which is which.
+    const items = [...(data.hoje || []), ...(data.futuro || [])];
+    let matched = 0;
+
+    for (const item of items) {
+      if (item.encerrado === true || item.encerrado === 'True') continue;
+
+      const id = `inmet-${item.id}`;
+      if (seenIds.includes(id)) continue;
+
+      // Geometry comes as a GeoJSON string in [lon, lat] order
+      let geometry = null;
+      try {
+        geometry = typeof item.poligono === 'string' ? JSON.parse(item.poligono) : item.poligono;
+      } catch {
+        geometry = null;
+      }
+      if (!geometry) continue;
+
+      const rings = geometry.type === 'Polygon' ? [geometry.coordinates[0]]
+        : geometry.type === 'MultiPolygon' ? geometry.coordinates.map(poly => poly[0])
+        : [];
+
+      const covered = brLocations.filter(loc =>
+        rings.some(ring => pointInGeoRing(loc.lat, loc.lon, ring))
+      );
+      if (covered.length === 0) continue;
+
+      // "inicio"/"fim" are naive local timestamps; Brazil has kept a fixed
+      // UTC-3 offset since abolishing DST in 2019
       const toIso = (naive) => {
-        if (!naive) return null;
-        const match = naive.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/);
-        return match ? `${match[1]}T${match[2]}${offset}` : null;
+        const match = (naive || '').match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+        return match ? `${match[1]}T${match[2]}:00-03:00` : null;
       };
 
       const window = getAlertWindow({
-        onset: toIso(fieldFromTable('Início')) || pubDate,
-        expires: toIso(fieldFromTable('Fim')),
-        sent: pubDate
+        onset: toIso(item.inicio),
+        expires: toIso(item.fim)
       });
       if (!window) continue;
 
-      seenIds.push(guid);
-
-      // INMET grades severity as Perigo Potencial (yellow) < Perigo (orange)
-      // < Grande Perigo (red). Check the longest label first so "Perigo
-      // Potencial" is not read as the more serious plain "Perigo".
+      // INMET grades alerts by colour: yellow "Perigo Potencial" is the
+      // lowest tier, then orange "Perigo", then red "Grande Perigo".
+      const grade = `${item.severidade || ''}`.toLowerCase();
       let severity = 'Moderate';
+      if (grade.includes('grande perigo')) severity = 'Severe';
+      else if (grade.includes('perigo potencial')) severity = 'Minor';
+      else if (grade.includes('perigo')) severity = 'Moderate';
+
+      const { alertLevel, relevance } = mapWeatherSeverity(severity);
+      if (alertLevel === 'info') continue;
+
       let eventType = 'weather';
-      const grade = `${title || ''} ${fieldFromTable('Severidade') || ''}`.toLowerCase();
+      const descricao = (item.descricao || '').toLowerCase();
+      if (descricao.includes('chuva') || descricao.includes('precipita')) eventType = 'rain';
+      else if (descricao.includes('tempestade')) eventType = 'thunderstorm';
+      else if (descricao.includes('vento') || descricao.includes('vendaval')) eventType = 'wind';
+      else if (descricao.includes('calor')) eventType = 'heat';
+      else if (descricao.includes('frio') || descricao.includes('geada')) eventType = 'cold';
+      else if (descricao.includes('umidade')) eventType = 'dry';
 
-      if (grade.includes('grande perigo') || grade.includes('vermelho')) severity = 'Severe';
-      else if (grade.includes('perigo potencial') || grade.includes('amarelo')) severity = 'Minor';
-      else if (grade.includes('perigo') || grade.includes('laranja')) severity = 'Moderate';
+      seenIds.push(id);
+      matched++;
 
-      if (title) {
-        const lowerTitle = title.toLowerCase();
-        if (lowerTitle.includes('chuva') || lowerTitle.includes('precipitação')) eventType = 'rain';
-        else if (lowerTitle.includes('tempestade')) eventType = 'thunderstorm';
-        else if (lowerTitle.includes('vento')) eventType = 'wind';
-        else if (lowerTitle.includes('onda de calor')) eventType = 'heat';
-      }
+      const riscos = Array.isArray(item.riscos) ? item.riscos.join(' ') : (item.riscos || '');
 
-      for (const location of brLocations) {
-        const { alertLevel, relevance } = mapWeatherSeverity(severity);
-
-        if (alertLevel !== 'info') {
-          alerts.push({
-            id: guid,
-            type: 'severe_weather',
-            alertLevel,
-            severity,
-            eventType,
-            relevance,
-            place: title || 'Brasil',
-            headline: title,
-            description,
-            locationName: location.name,
-            source: 'INMET Brasil',
-            url: 'https://alertas2.inmet.gov.br',
-            ...window
-          });
-          break;
-        }
+      for (const location of covered) {
+        alerts.push({
+          id: `${id}-${location.name}`,
+          type: 'severe_weather',
+          alertLevel,
+          severity,
+          eventType,
+          relevance,
+          place: item.descricao || 'Brasil',
+          headline: `${item.descricao || 'Aviso'} - ${item.severidade || ''}`.trim(),
+          description: riscos,
+          locationName: location.name,
+          source: 'INMET Brasil',
+          url: `https://avisos.inmet.gov.br/${item.id}`,
+          ...window
+        });
       }
     }
+
+    console.log(`Weather Clock: INMET ${matched}/${items.length} alerts cover the user's locations`);
+
   } catch (err) {
     console.error('Weather Clock: Brazil INMET check error:', err);
   }
-  
+
   return alerts;
 }
 
@@ -1468,7 +1454,8 @@ async function checkCanadaNAAD(locations, seenIds) {
     const text = await response.text();
     const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
     const items = [...text.matchAll(entryRegex)];
-    
+    let matched = 0;
+
     for (const itemMatch of items) {
       const itemXml = itemMatch[1];
       
@@ -1498,6 +1485,20 @@ async function checkCanadaNAAD(locations, seenIds) {
       const lowerTitle = (title || '').toLowerCase();
       if (/\b(ended|terminée|terminé)\s*$/.test(lowerTitle)) continue;
 
+      // Every NAAD entry carries the affected area as a georss:polygon, listed
+      // as "lat lon lat lon ..." rather than CAP's comma-paired form
+      const polygonMatch = itemXml.match(/<georss:polygon>([^<]+)<\/georss:polygon>/);
+      if (!polygonMatch) continue;
+      const flat = polygonMatch[1].trim().split(/\s+/).map(Number);
+      const polygon = [];
+      for (let i = 0; i + 1 < flat.length; i += 2) {
+        if (!isNaN(flat[i]) && !isNaN(flat[i + 1])) polygon.push([flat[i], flat[i + 1]]);
+      }
+      if (polygon.length < 3) continue;
+
+      const covered = caLocations.filter(loc => pointInPolygon(loc.lat, loc.lon, polygon));
+      if (covered.length === 0) continue;
+
       // The expiry time lives in the summary HTML, not in a dedicated element
       const expiresMatch = (summary || '').match(/Expires:\s*([0-9T:+\-.]+)/);
       const window = getAlertWindow({
@@ -1505,8 +1506,6 @@ async function checkCanadaNAAD(locations, seenIds) {
         sent: updated
       });
       if (!window) continue;
-
-      seenIds.push(id);
 
       // Prefer the severity the issuer declared over guessing from wording
       let severity = categories.severity && categories.severity !== 'Unknown'
@@ -1517,6 +1516,7 @@ async function checkCanadaNAAD(locations, seenIds) {
       if (title || summary) {
         const content = (title + ' ' + (summary || '')).toLowerCase();
         if (content.includes('tornado') || content.includes('tornade')) eventType = 'tornado';
+        else if (content.includes('air quality') || content.includes('qualité de l\'air')) eventType = 'air_quality';
         else if (content.includes('thunderstorm') || content.includes('orage')) eventType = 'thunderstorm';
         else if (content.includes('wind') || content.includes('vent')) eventType = 'wind';
         else if (content.includes('rain') || content.includes('pluie')) eventType = 'rain';
@@ -1527,33 +1527,36 @@ async function checkCanadaNAAD(locations, seenIds) {
         else if (content.includes('flood') || content.includes('inondation')) eventType = 'flood';
       }
 
-      for (const location of caLocations) {
-        let { alertLevel, relevance } = mapWeatherSeverity(severity);
-        // Tornado warnings elevate one step
-        if (eventType === 'tornado') {
-          ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
-        }
+      let { alertLevel, relevance } = mapWeatherSeverity(severity);
+      // Tornado warnings elevate one step
+      if (eventType === 'tornado') {
+        ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
+      }
+      if (alertLevel === 'info') continue;
 
-        if (alertLevel !== 'info') {
-          alerts.push({
-            id,
-            type: eventType === 'tornado' ? 'tornado' : 'severe_weather',
-            alertLevel,
-            severity,
-            eventType,
-            relevance,
-            place: title || 'Canada',
-            headline: title,
-            description: summary,
-            locationName: location.name,
-            source: 'NAAD Canada',
-            url: 'https://weather.gc.ca/warnings/index_e.html',
-            ...window
-          });
-          break;
-        }
+      seenIds.push(id);
+      matched++;
+
+      for (const location of covered) {
+        alerts.push({
+          id: `${id}-${location.name}`,
+          type: eventType === 'tornado' ? 'tornado' : 'severe_weather',
+          alertLevel,
+          severity,
+          eventType,
+          relevance,
+          place: title || 'Canada',
+          headline: title,
+          description: summary,
+          locationName: location.name,
+          source: 'NAAD Canada',
+          url: 'https://weather.gc.ca/warnings/index_e.html',
+          ...window
+        });
       }
     }
+
+    console.log(`Weather Clock: NAAD ${matched}/${items.length} alerts cover the user's locations`);
   } catch (err) {
     console.error('Weather Clock: Canada NAAD check error:', err);
   }
@@ -1572,8 +1575,11 @@ async function checkHurricanes(locations, seenIds) {
   if (!hasHurricaneZone) return alerts;
   
   try {
-    const response = await fetch(APIS.hurricanesAtlantic);
-    if (!response.ok) return alerts;
+    const response = await fetch(APIS.hurricanes);
+    if (!response.ok) {
+      console.log('Weather Clock: NHC returned', response.status);
+      return alerts;
+    }
     
     const data = await response.json();
     const storms = data.activeStorms || [];

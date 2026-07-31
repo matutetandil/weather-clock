@@ -41,12 +41,17 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 - Regional severe weather alerts:
   - 🇺🇸 USA (NWS)
   - 🇨🇦 Canada (NAAD)
-  - 🇪🇺 Europe (MeteoAlarm - 35 countries, with region filtering)
+  - 🇪🇺 Europe (MeteoAlarm - 35 countries)
   - 🇳🇿 New Zealand (GeoNet + MetService)
-  - 🇦🇷 Argentina (SMN with polygon filtering)
+  - 🇦🇷 Argentina (SMN)
   - 🇧🇷 Brazil (INMET)
-  - 🇨🇱 Chile (MeteoChile with polygon filtering)
+  - 🇨🇱 Chile (MeteoChile)
   - 🌀 Tropical storms (NOAA NHC)
+- **Every source is filtered to your actual location**, not just your country.
+  Each alert is matched against its own affected area — the issuer's polygon
+  where one is published (Argentina, Canada, Brazil, Chile, New Zealand), the
+  bundled EMMA region polygons for Europe, and the service's own point query
+  for the USA. A warning for the next province over is not your warning.
 - Only alerts in effect are shown. Every alert is filtered by its CAP validity
   window (`onset`..`expires`), so what you see matches the issuing authority's
   own map. Cancellations and test messages are discarded.
@@ -129,8 +134,33 @@ git clone https://github.com/matutetandil/weather-clock.git
 ├── newtab.js          # Frontend logic
 ├── background.js      # Alert service worker
 ├── data/              # Bundled EMMA region polygons for European alerts
+├── tools/             # Development scripts (not shipped in the extension)
 └── icons/             # Extension icons
 ```
+
+### Checking the alert sources
+
+```bash
+node tools/check-sources.mjs
+```
+
+Runs the real `background.js` against the live feeds outside Chrome, so you
+can see what each source returns without reloading the extension and waiting
+for an alarm. It asserts that no alert is returned past its `expires` and that
+none is attributed to a location outside its area.
+
+Live feeds change constantly, so zero alerts for a city is usually normal —
+what matters are the `FAIL` lines. INMET rate-limits aggressively; re-run
+after a minute if it says so.
+
+### Regenerating the European region data
+
+```bash
+python3 tools/build_regions.py
+```
+
+Rebuilds `data/emma-regions.json`. Only needed when MeteoAlarm changes its
+regions, such as when a country renumbers its EMMA codes.
 
 ## Contributing
 
