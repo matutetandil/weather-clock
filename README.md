@@ -37,6 +37,15 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
 - City search with autocomplete
 
 ### ⚠️ Disaster Alerts
+
+> **This is supplementary information, not an emergency warning service.**
+> It runs only while Chrome is open, polls public feeds every few minutes
+> rather than receiving instant pushes, and cannot reach you when your
+> computer is closed or asleep. Real warning systems — emergency cell
+> broadcasts, government warning apps, weather radio, and earthquake early
+> warning networks that deliver in seconds — offer delivery guarantees a
+> browser extension cannot. Use this alongside them, never instead of them.
+
 - Global earthquake monitoring (USGS + GeoNet for New Zealand). Alerts are
   based on the shaking expected at *your* location, not on the magnitude at
   the epicentre: a large earthquake far away shakes nothing here and is not
@@ -62,6 +71,12 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
   own map. Cancellations and test messages are discarded.
 - Alerts starting within the next 24 hours appear dimmed and labelled
   "Upcoming — starts tomorrow 15:00", never as if they were already active.
+- **Failures are visible.** A source that breaks contributes no alerts, which
+  looks exactly like a quiet day. Every feed request is recorded, and when a
+  source has failed repeatedly the alerts panel says so instead of showing a
+  reassuring tick. Both outages found in this codebase — MeteoAlarm's retired
+  feed and a hurricane check that fetched an undefined URL — ran for months
+  behind a green checkmark.
 - Per-city alert toggles
 - Chrome desktop notifications
 - Badge showing active alert count (alerts in effect only)

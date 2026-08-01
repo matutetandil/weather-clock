@@ -113,6 +113,54 @@ function isInSouthAmerica(lat, lon) {
 const CHECK_INTERVAL_MINUTES = 3;
 const STORAGE_KEY_SEEN = 'seenDisasters';
 const STORAGE_KEY_ALERTS = 'activeAlerts';
+const STORAGE_KEY_HEALTH = 'sourceHealth';
+
+// ============================================
+// SOURCE HEALTH
+// ============================================
+// A source that breaks contributes no alerts, which is indistinguishable
+// from a quiet day unless we say so. Both of the outages found in this
+// codebase - MeteoAlarm's retired feed and a hurricane check that fetched an
+// undefined URL - ran for months behind a reassuring "no alerts" screen.
+// Every feed request is recorded so the UI can tell the user when it is
+// showing an incomplete picture.
+const UNHEALTHY_AFTER_FAILURES = 2;
+
+let sourceHealth = {};
+
+function recordSourceSuccess(source) {
+  sourceHealth[source] = {
+    lastSuccess: Date.now(),
+    consecutiveFailures: 0,
+    lastError: null
+  };
+}
+
+function recordSourceFailure(source, detail) {
+  const previous = sourceHealth[source] || {};
+  sourceHealth[source] = {
+    lastSuccess: previous.lastSuccess || null,
+    consecutiveFailures: (previous.consecutiveFailures || 0) + 1,
+    lastError: detail
+  };
+}
+
+// fetch() that remembers whether the source answered. Network errors still
+// propagate, so existing error handling is unchanged.
+async function trackedFetch(source, url, options) {
+  try {
+    const response = await fetch(url, options);
+    if (response.ok) {
+      recordSourceSuccess(source);
+    } else {
+      recordSourceFailure(source, `HTTP ${response.status}`);
+    }
+    return response;
+  } catch (err) {
+    recordSourceFailure(source, err.message || 'network error');
+    throw err;
+  }
+}
 const STORAGE_KEY_SETTINGS = 'weatherClockSettings';
 
 // ============================================
@@ -445,7 +493,7 @@ async function checkEarthquakes(locations, seenIds) {
   const alerts = [];
   
   try {
-    const response = await fetch(APIS.earthquakes);
+    const response = await trackedFetch('Earthquakes (USGS)', APIS.earthquakes);
     if (!response.ok) return alerts;
     
     const data = await response.json();
@@ -548,7 +596,7 @@ async function checkNWSAlerts(locations, seenIds) {
 
 async function checkNWSForLocation(location, seenIds, alerts) {
   const url = `${APIS.nwsAlerts}?point=${location.lat.toFixed(4)},${location.lon.toFixed(4)}`;
-  const response = await fetch(url, {
+  const response = await trackedFetch('NWS (USA)', url, {
     headers: {
       'User-Agent': 'WeatherClockExtension/1.0 (github.com/weather-clock)',
       'Accept': 'application/geo+json'
@@ -636,7 +684,7 @@ async function checkGeoNet(locations, seenIds) {
   if (nzLocations.length === 0) return alerts;
   
   try {
-    const response = await fetch(APIS.geonetQuakes);
+    const response = await trackedFetch('GeoNet (NZ)', APIS.geonetQuakes);
     if (!response.ok) {
       console.log('Weather Clock: GeoNet API returned', response.status);
       return alerts;
@@ -708,7 +756,7 @@ async function checkMetServiceCAP(locations, seenIds) {
   if (nzLocations.length === 0) return alerts;
   
   try {
-    const response = await fetch(APIS.metserviceCap, {
+    const response = await trackedFetch('MetService (NZ)', APIS.metserviceCap, {
       headers: {
         'Accept': 'application/rss+xml, application/xml, text/xml'
       }
@@ -937,7 +985,7 @@ async function checkArgentinaSMN(locations, seenIds) {
   
   try {
     // 1. Fetch RSS feed
-    const response = await fetch(APIS.argentinaSMN, {
+    const response = await trackedFetch('SMN (Argentina)', APIS.argentinaSMN, {
       headers: { 'Accept': 'application/rss+xml, application/xml, text/xml' }
     });
     if (!response.ok) {
@@ -1185,7 +1233,7 @@ async function checkMeteoAlarm(locations, seenIds) {
 
 async function checkMeteoAlarmFeed(slug, targets, seenIds, alerts) {
   // The feed server answers 406 to any specific XML Accept type, so ask for */*
-  const response = await fetch(`${APIS.meteoalarmFeedBase}${slug}`, {
+  const response = await trackedFetch(`MeteoAlarm (${slug})`, `${APIS.meteoalarmFeedBase}${slug}`, {
     headers: { 'Accept': '*/*' }
   });
   if (!response.ok) {
@@ -1313,7 +1361,7 @@ async function checkBrazilINMET(locations, seenIds) {
   if (brLocations.length === 0) return alerts;
 
   try {
-    const response = await fetch(APIS.brazilINMET);
+    const response = await trackedFetch('INMET (Brazil)', APIS.brazilINMET);
     if (!response.ok) {
       console.log('Weather Clock: Brazil INMET returned', response.status);
       return alerts;
@@ -1436,7 +1484,7 @@ async function checkChileMeteo(locations, seenIds) {
   if (clLocations.length === 0) return alerts;
   
   try {
-    const response = await fetch(APIS.chileMeteo, {
+    const response = await trackedFetch('MeteoChile (Chile)', APIS.chileMeteo, {
       headers: { 'Accept': 'application/rss+xml, application/xml, text/xml' }
     });
     if (!response.ok) {
@@ -1529,7 +1577,7 @@ async function checkCanadaNAAD(locations, seenIds) {
   if (caLocations.length === 0) return alerts;
   
   try {
-    const response = await fetch(APIS.canadaNAAD, {
+    const response = await trackedFetch('NAAD (Canada)', APIS.canadaNAAD, {
       headers: { 'Accept': 'application/atom+xml, application/xml, text/xml' }
     });
     if (!response.ok) {
@@ -1661,7 +1709,7 @@ async function checkHurricanes(locations, seenIds) {
   if (!hasHurricaneZone) return alerts;
   
   try {
-    const response = await fetch(APIS.hurricanes);
+    const response = await trackedFetch('Hurricanes (NHC)', APIS.hurricanes);
     if (!response.ok) {
       console.log('Weather Clock: NHC returned', response.status);
       return alerts;
@@ -1746,9 +1794,13 @@ async function checkAllDisasters() {
     const storage = await chrome.storage.local.get([
       STORAGE_KEY_SETTINGS,
       STORAGE_KEY_SEEN,
-      STORAGE_KEY_ALERTS
+      STORAGE_KEY_ALERTS,
+      STORAGE_KEY_HEALTH
     ]);
-    
+
+    // Carry health across service worker restarts, which Chrome does often
+    sourceHealth = storage[STORAGE_KEY_HEALTH] || {};
+
     const settings = storage[STORAGE_KEY_SETTINGS] || {};
     let seenIds = storage[STORAGE_KEY_SEEN] || [];
     let activeAlerts = storage[STORAGE_KEY_ALERTS] || [];
@@ -1846,6 +1898,7 @@ async function checkAllDisasters() {
     activeAlerts = Array.from(alertMap.values()).slice(-100);
     
     await chrome.storage.local.set({
+      [STORAGE_KEY_HEALTH]: sourceHealth,
       [STORAGE_KEY_SEEN]: seenIds,
       [STORAGE_KEY_ALERTS]: activeAlerts
     });
@@ -1996,8 +2049,18 @@ chrome.notifications.onClicked.addListener((notificationId) => {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getAlerts') {
-    chrome.storage.local.get(STORAGE_KEY_ALERTS).then(result => {
-      sendResponse({ alerts: result[STORAGE_KEY_ALERTS] || [] });
+    chrome.storage.local.get([STORAGE_KEY_ALERTS, STORAGE_KEY_HEALTH]).then(result => {
+      const health = result[STORAGE_KEY_HEALTH] || {};
+      // Sources appear here only once they have been queried, so this lists
+      // exactly the ones that matter for the user's saved locations
+      const unavailable = Object.entries(health)
+        .filter(([, h]) => (h.consecutiveFailures || 0) >= UNHEALTHY_AFTER_FAILURES)
+        .map(([name, h]) => ({ name, lastSuccess: h.lastSuccess, lastError: h.lastError }));
+
+      sendResponse({
+        alerts: result[STORAGE_KEY_ALERTS] || [],
+        unavailableSources: unavailable
+      });
     });
     return true;
   }

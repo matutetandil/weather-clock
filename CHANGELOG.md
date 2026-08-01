@@ -2,6 +2,15 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.8.0] - 2026-07-31
+
+### Added
+- Source health tracking. A source that breaks contributes no alerts, which is indistinguishable from a quiet day — and the panel showed a green "✓ No recent alerts" either way. Both outages found in this codebase ran for months behind that tick: MeteoAlarm's aggregated feed had been retired upstream, and the hurricane check had never worked at all, fetching an undefined URL since it was written. Every feed request now records whether the source answered, and after two consecutive failures the alerts panel names the source, when it was last reached, and the error. A single transient failure is tolerated silently.
+- Disclaimer in the alerts panel, the README and the store listing, stating plainly that this is supplementary information rather than an emergency warning service: it runs only while Chrome is open, polls every few minutes instead of receiving pushes, and cannot reach a user whose computer is closed.
+
+### Notes
+- Health is keyed by source and persisted, so it survives the service worker restarts Chrome performs constantly. Sources are recorded only once queried, so the panel reports on the sources that actually matter for the user's saved locations.
+
 ## [1.7.0] - 2026-07-31
 
 ### Added

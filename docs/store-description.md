@@ -46,8 +46,18 @@ REAL-TIME DISASTER ALERTS
 - Severe weather alerts for USA (NWS), Canada (NAAD), Europe (MeteoAlarm), Argentina (SMN), Brazil (INMET), Chile (MeteoChile), and New Zealand (MetService)
 - Hurricane and tropical storm tracking (NOAA NHC)
 - Chrome desktop notifications for nearby critical events
-- Smart alert levels based on actual local impact, not arbitrary thresholds
+- Alert levels reflect the impact expected at your location, not the size of the event: a large earthquake far away is not reported as your alert
+- Every alert is matched to its own affected area and shown only while it is in effect
+- Warns you when a source cannot be reached, so an empty list is never mistaken for all-clear
 - Direct links to official alert sources for more information
+
+IMPORTANT — PLEASE READ
+Weather Clock is supplementary information, not an emergency warning service.
+It only runs while Chrome is open, it polls public feeds every few minutes
+rather than receiving instant pushes, and it cannot reach you when your
+computer is closed or asleep. It is no substitute for official channels such
+as emergency cell broadcasts, government warning apps, or weather radio.
+Always follow your local authorities.
 
 THEMES & CUSTOMIZATION
 - Multiple color themes (Dark, Light, Cream, and more)

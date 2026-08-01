@@ -2047,6 +2047,37 @@ const ALERT_LEVEL_EMOJIS = {
   info: 'ℹ️'
 };
 
+// Shown under the alert list. This is a supplementary view built on public
+// feeds, not an emergency warning system: it only runs while the browser is
+// open, and it polls rather than receiving pushes.
+const ALERTS_DISCLAIMER =
+  'Supplementary information only — not an emergency warning service. ' +
+  'Always follow your local authorities.';
+
+// Tell the user when the picture is incomplete. Silence from a broken source
+// looks exactly like silence from a calm day, so the difference has to be
+// stated explicitly.
+function renderSourceWarning(unavailable) {
+  if (!unavailable || unavailable.length === 0) return '';
+
+  const names = unavailable.map(s => s.name).join(', ');
+  const lastSuccess = unavailable
+    .map(s => s.lastSuccess)
+    .filter(Boolean)
+    .sort((a, b) => b - a)[0];
+
+  const since = lastSuccess
+    ? `Last reached ${formatAlertTimeAgo(lastSuccess)}.`
+    : 'Never reached successfully.';
+
+  return `
+    <div class="alerts-source-warning">
+      <div class="alerts-source-warning-title">⚠️ ${unavailable.length === 1 ? 'A source is' : `${unavailable.length} sources are`} unavailable</div>
+      <div class="alerts-source-warning-detail">${names}. ${since} Alerts from ${unavailable.length === 1 ? 'it' : 'them'} may be missing.</div>
+    </div>
+  `;
+}
+
 // Filter alerts by city, age, deduplicate, sort, validate, and limit to 10
 function filterAndDeduplicateAlerts(alerts, cityName) {
   let filtered = cityName
@@ -2166,22 +2197,29 @@ async function loadAlerts() {
   try {
     const response = await chrome.runtime.sendMessage({ action: 'getAlerts' });
     const alerts = response?.alerts || [];
+    const unavailable = response?.unavailableSources || [];
     const recentAlerts = filterAndDeduplicateAlerts(alerts, currentCityName);
 
+    const warningHTML = renderSourceWarning(unavailable);
+    const disclaimerHTML = `<div class="alerts-disclaimer">${ALERTS_DISCLAIMER}</div>`;
+
     if (recentAlerts.length === 0) {
-      alertsContent.innerHTML = `
+      // A broken source produces no alerts, exactly like a quiet day. Say
+      // which it is instead of showing a reassuring tick either way.
+      const allQuiet = `
         <div class="alerts-empty">
           <div class="alerts-empty-icon">✓</div>
           <div class="alerts-empty-text">No recent alerts for ${currentCityName || 'this location'}</div>
           <div class="alerts-empty-sub">Monitoring earthquakes worldwide + regional alerts</div>
         </div>
       `;
+      alertsContent.innerHTML = (unavailable.length ? warningHTML : allQuiet) + disclaimerHTML;
       return;
     }
 
-    alertsContent.innerHTML = `
-      <div class="alerts-scroll">${recentAlerts.map(renderAlertItem).join('')}</div>
-    `;
+    alertsContent.innerHTML = warningHTML +
+      `<div class="alerts-scroll">${recentAlerts.map(renderAlertItem).join('')}</div>` +
+      disclaimerHTML;
 
   } catch (err) {
     console.error('Error loading alerts:', err);

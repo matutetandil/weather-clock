@@ -1331,6 +1331,37 @@
       opacity: 0.5;
     }
 
+    /* Shown when a feed cannot be reached. A broken source produces no
+       alerts, which is indistinguishable from a calm day unless we say so. */
+    .alerts-source-warning {
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      border-left: 3px solid #f97316;
+      background: rgba(249, 115, 22, 0.12);
+    }
+
+    .alerts-source-warning-title {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+
+    .alerts-source-warning-detail {
+      font-size: 10px;
+      opacity: 0.7;
+      line-height: 1.4;
+    }
+
+    .alerts-disclaimer {
+      font-size: 9px;
+      opacity: 0.45;
+      line-height: 1.4;
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(128, 128, 128, 0.2);
+    }
+
     /* Alerts that have not taken effect yet: dimmed, so they read as a
        heads-up rather than as something happening right now */
     .alert-item.alert-upcoming {
