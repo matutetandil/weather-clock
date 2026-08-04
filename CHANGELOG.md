@@ -11,6 +11,10 @@ All notable changes to the Weather Clock extension will be documented in this fi
 ### Notes
 - Health is keyed by source and persisted, so it survives the service worker restarts Chrome performs constantly. Sources are recorded only once queried, so the panel reports on the sources that actually matter for the user's saved locations.
 
+### Privacy
+- The privacy policy claimed that coordinates are never sent to alert APIs. That stopped being true in 1.6.0, when the USA source moved to `api.weather.gov/alerts/active?point=lat,lon` — necessary because most NWS alerts reference forecast zones rather than publishing a boundary that could be matched on-device. The policy now states this exception explicitly. An audit confirmed NWS is the only alert source that transmits coordinates; every other feed is downloaded in full and filtered locally.
+- jsDelivr, which serves the weather icons, was missing from the third-party list and has been added. It receives no coordinates, but like any image request it does see the user's IP.
+
 ## [1.7.0] - 2026-07-31
 
 ### Added

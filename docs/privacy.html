@@ -63,7 +63,7 @@
 <body>
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p class="subtitle">Weather Clock &mdash; Chrome Extension &bull; Last updated: February 4, 2026</p>
+    <p class="subtitle">Weather Clock &mdash; Chrome Extension &bull; Last updated: August 4, 2026</p>
 
     <div class="highlight">
       <strong>Summary:</strong> Weather Clock does not collect, store, or transmit any personal data to us. All your data stays on your device.
@@ -86,9 +86,13 @@
       <li><strong>Open-Meteo</strong> (open-meteo.com) &mdash; weather forecasts. No API key required. <a href="https://open-meteo.com/en/terms" target="_blank">Their privacy policy</a>.</li>
       <li><strong>Stormglass</strong> (stormglass.io) &mdash; tidal data. Only if you provide your own API key. <a href="https://stormglass.io/privacy-policy/" target="_blank">Their privacy policy</a>.</li>
       <li><strong>OpenStreetMap Nominatim</strong> (nominatim.openstreetmap.org) &mdash; geocoding (converting coordinates to city names). <a href="https://osmfoundation.org/wiki/Privacy_Policy" target="_blank">Their privacy policy</a>.</li>
+      <li><strong>jsDelivr</strong> (cdn.jsdelivr.net) &mdash; weather icons only. No coordinates or personal data are sent; like any request for an image, it does reveal your IP address to the CDN. <a href="https://www.jsdelivr.com/terms/privacy-policy-jsdelivr-net" target="_blank">Their privacy policy</a>.</li>
     </ul>
-    <p>For disaster alerts, your coordinates are <strong>not</strong> sent to alert APIs. Instead, the extension fetches public alert feeds and filters them locally on your device based on your region.</p>
-    <p>Alert data sources include: USGS, NWS (USA), GeoNet and MetService (New Zealand), SMN (Argentina), INMET (Brazil), MeteoChile (Chile), MeteoAlarm (Europe), NAAD (Canada), and NOAA NHC (hurricanes).</p>
+    <p>For disaster alerts, the extension downloads public alert feeds and filters them locally on your device, comparing your coordinates against each alert's affected area without sending them anywhere. There is one exception:</p>
+    <ul>
+      <li><strong>National Weather Service</strong> (api.weather.gov) &mdash; for locations in the USA, your coordinates are sent as a query parameter so the service can return the alerts covering that exact point. This is necessary because most NWS alerts reference forecast zones rather than publishing a boundary that could be matched on your device. <a href="https://www.weather.gov/privacy" target="_blank">Their privacy policy</a>.</li>
+    </ul>
+    <p>Alert data sources include: USGS, NWS (USA), GeoNet and MetService (New Zealand), SMN (Argentina), INMET (Brazil), MeteoChile (Chile), MeteoAlarm (Europe), NAAD (Canada), and NOAA NHC (hurricanes). Apart from the NWS request above, these feeds are fetched in full and filtered on your device.</p>
 
     <h2>Data We Collect</h2>
     <p><strong>None.</strong> We do not collect, log, or transmit any user data. There is no analytics, no telemetry, no tracking, and no advertising.</p>
