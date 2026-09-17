@@ -2,6 +2,20 @@
 
 All notable changes to the Weather Clock extension will be documented in this file.
 
+## [1.8.1] - 2026-09-17
+
+### Fixed
+- Tsunami-flagged earthquakes raised alerts in coastal cities anywhere on Earth, however small or distant the earthquake. Christchurch, 10 km from the sea, was alerted about a M6.5 off Alaska 10,818 km away — and about a M5.3 at 10,570 km. The local shaking in both cases was MMI 1.0, "not felt", so there was no alert at all until the tsunami flag elevated it. The flag does not mean a wave is coming: USGS sets it when NOAA issued any message for the event, including "no threat" bulletins. Exposure now also depends on how far a tsunami from an earthquake that size can travel, following the magnitude bands the Pacific Tsunami Warning Centre uses to scope its own messages — below M6.5 no tsunami response, M6.5–7.5 a local threat (100 km), M7.6–7.8 regional (1000 km), and only M7.9+ capable of crossing an ocean basin. Christchurch now receives nothing from either Alaska event, while a M7.0 offshore Canterbury and a M8.2 in Chile still reach it.
+
+### Added
+- `tools/check-tsunami-exposure.mjs`, a regression test for which locations a tsunami-flagged earthquake may alert. This rule has now been wrong twice — first elevating inland cities (fixed in 1.7.0), then every coastal city on the planet — so the nine cases covering both halves are pinned down. It runs offline against the real `isTsunamiExposed()`.
+
+### Changed
+- The VM loader that runs `background.js` outside Chrome moved to `tools/load-background.mjs`, shared by both checking tools instead of being duplicated.
+
+### Notes
+- The known issue recorded in 1.7.0 — that exposure measures distance to the sea and not which ocean — still stands, but the magnitude bands now confine it to M7.9+ events, which are rare. A tsunami-flagged Pacific earthquake below that magnitude no longer elevates for an Atlantic coastal city, because it no longer elevates anything outside its own threat radius.
+
 ## [1.8.0] - 2026-07-31
 
 ### Added

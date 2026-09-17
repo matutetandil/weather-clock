@@ -50,8 +50,10 @@ A beautiful Chrome extension that replaces your new tab with a feature-rich weat
   based on the shaking expected at *your* location, not on the magnitude at
   the epicentre: a large earthquake far away shakes nothing here and is not
   reported as your alert. Tsunami-flagged events still elevate, since a
-  tsunami travels — but only for cities within 25 km of an ocean, so inland
-  towns are not warned about a wave that cannot reach them.
+  tsunami travels — but only for cities within 25 km of an ocean, and only
+  within the distance an earthquake that size can actually reach, so neither
+  inland towns nor far-off coasts are warned about a wave that will not
+  arrive.
 - Regional severe weather alerts:
   - 🇺🇸 USA (NWS)
   - 🇨🇦 Canada (NAAD)
@@ -172,6 +174,15 @@ none is attributed to a location outside its area.
 Live feeds change constantly, so zero alerts for a city is usually normal —
 what matters are the `FAIL` lines. INMET rate-limits aggressively; re-run
 after a minute if it says so.
+
+```bash
+node tools/check-tsunami-exposure.mjs
+```
+
+Runs offline and pins down which locations a tsunami-flagged earthquake may
+alert — the rule that has produced wrong alerts twice, first for inland cities
+and then for distant coastal ones. Worth running after any change to the
+earthquake path.
 
 ### Regenerating the bundled data
 

@@ -293,13 +293,31 @@ function mapLocalMMI(localMMI) {
 // ============================================
 // TSUNAMI EXPOSURE
 // ============================================
-// The USGS tsunami flag says an earthquake can generate a tsunami, not that
-// any given city could be reached by one. An inland town is not at risk
-// however large the earthquake was, so a location only counts as exposed
-// when it sits close to an ocean coast. data/coastline.json holds the
-// coastline vertices; lakes are excluded, so cities on the Great Lakes are
-// correctly treated as inland.
+// The USGS tsunami flag says NOAA issued some message for the earthquake -
+// including "no threat" bulletins - not that a wave is coming for any given
+// city. Exposure needs two things to be true at once: the city has to be on
+// an ocean coast, and it has to be close enough for an earthquake that size
+// to reach it.
+//
+// data/coastline.json holds the coastline vertices; lakes are excluded, so
+// cities on the Great Lakes are correctly treated as inland.
 const COASTAL_THRESHOLD_KM = 25;
+
+// How far a tsunami from an earthquake of this magnitude is treated as a
+// threat, following the magnitude bands the Pacific Tsunami Warning Centre
+// uses to scope its own messages: below M6.5 no tsunami response, M6.5-7.5
+// a local threat, M7.6-7.8 a regional one, and only M7.9+ is capable of
+// crossing an ocean basin.
+//
+// Without this, the tsunami flag elevated every coastal city on the planet
+// for any flagged earthquake: an M5.3 off Alaska raised an alert in
+// Christchurch, 10,500 km away.
+function tsunamiThreatRadiusKm(magnitude) {
+  if (magnitude >= 7.9) return Infinity;
+  if (magnitude >= 7.6) return 1000;
+  if (magnitude >= 6.5) return 100;
+  return 0;
+}
 
 let coastlineCache = null;
 const coastDistanceCache = new Map();
@@ -343,10 +361,11 @@ async function calculateCoastDistance(lat, lon) {
 // location as exposed if the coastline failed to load, so a data problem
 // cannot silently suppress a genuine tsunami alert.
 //
-// This measures distance to the sea, not which sea: a Pacific earthquake
-// still elevates for an Atlantic coastal city. That is deliberate. The
-// obvious refinement - checking whether the great-circle path from the
-// epicentre to the city crosses land - was prototyped and rejected: it
+// This measures distance to the sea, not which sea: an ocean-wide event in
+// the Pacific still elevates for an Atlantic coastal city. That is
+// deliberate, and the magnitude bands above confine it to M7.9+, which is
+// rare. The obvious refinement - checking whether the great-circle path from
+// the epicentre to the city crosses land - was prototyped and rejected: it
 // reports a Kyushu earthquake as unable to reach Tokyo, because the straight
 // line crosses Japan. Tsunamis diffract around coastlines, so the test fails
 // exactly for near-field events, the ones with the least warning time.
@@ -355,7 +374,9 @@ async function calculateCoastDistance(lat, lon) {
 // is what NOAA's tsunami warning centres publish. Until those products are
 // integrated, over-warning a coastal city on the wrong ocean is the correct
 // way to be wrong.
-async function isTsunamiExposed(location) {
+async function isTsunamiExposed(location, magnitude, distanceKm) {
+  if (distanceKm > tsunamiThreatRadiusKm(magnitude)) return false;
+
   const points = await loadCoastline();
   if (points.length === 0) return true;
   return (await calculateCoastDistance(location.lat, location.lon)) <= COASTAL_THRESHOLD_KM;
@@ -522,7 +543,7 @@ async function checkEarthquakes(locations, seenIds) {
 
         // A distant quake can still threaten a coast through its tsunami -
         // but only a coast. Inland cities are not reachable by one.
-        const exposed = tsunami === 1 && await isTsunamiExposed(location);
+        const exposed = tsunami === 1 && await isTsunamiExposed(location, magnitude, distanceKm);
         if (exposed) ({ alertLevel, relevance } = elevateAlertLevel({ alertLevel, relevance }));
 
         if (alertLevel === 'info') continue;
