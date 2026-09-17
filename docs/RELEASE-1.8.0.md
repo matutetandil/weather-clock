@@ -1,5 +1,12 @@
 # Publicar la v1.8.0
 
+> **Estado: cerrado. La 1.8.0 fue aprobada y publicada en la Chrome Web
+> Store.** Los pasos de abajo ya se hicieron; el documento queda como
+> plantilla para el próximo release. La declaración de *Data usage* del punto
+> 1 pasó la revisión tal como está, así que no hace falta volver a tocarla
+> mientras `api.weather.gov` siga siendo la única fuente que envía
+> coordenadas.
+
 Vas de la **1.3.2** (lo publicado hoy en la tienda) a la **1.8.0**, saltando
 cinco versiones de una. Todo lo de la 1.4.0 en adelante nunca se subió.
 
